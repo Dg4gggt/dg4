@@ -141,11 +141,12 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import (
     Qt, QTimer, QThread, pyqtSignal, QRect,
-    QPropertyAnimation, QEasingCurve, QPoint,
+    QPropertyAnimation, QVariantAnimation, QEasingCurve, QPoint,
 )
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QLinearGradient,
     QRadialGradient, QFont, QPainterPath, QConicalGradient,
+    QRegion,
 )
 
 # ──────────────────────────────────────────────
@@ -562,6 +563,7 @@ class RingWidget(QWidget):
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         cx, cy, r = self.width() // 2, self.height() // 2, 80
 
         for pt in self._particles:
@@ -712,6 +714,7 @@ class SpeedGraphWidget(QWidget):
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         w, h = self.width(), self.height()
         # фон
         path = QPainterPath()
@@ -956,6 +959,7 @@ class ConnectButton(QWidget):
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         w, h = self.width(), self.height()
         path = QPainterPath()
         path.addRoundedRect(0, 0, w, h, h // 2, h // 2)
@@ -1032,6 +1036,7 @@ class SmallButton(QWidget):
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         w, h = self.width(), self.height()
         path = QPainterPath()
         path.addRoundedRect(0, 0, w, h, 10, 10)
@@ -1075,12 +1080,17 @@ def _gc_anim(anim):
         pass
 
 
-def slide_panel_in(panel, anchor, target_w=None, target_h=None, duration=220):
+_PANEL_HIDDEN_REVEAL = 8   # ширина «спрятанной» зоны панели (под правым краем main)
+
+
+def slide_panel_in(panel, anchor, target_w=None, target_h=None, duration=260):
     """Выезд панели «из-под» правого края anchor.
 
-    Изначально панель полного размера, но позиционирована так, что её правый
-    край заходит за правый край anchor → панель целиком скрыта за main-окном.
-    Анимируем только pos — никакого пересчёта layout каждый кадр.
+    Панель сразу позиционируется в финальной точке и финальным размером —
+    layout рассчитывается один раз, текст не сплющивается и не пересчитывается
+    в каждом кадре. Анимируется только видимая область через setMask:
+    маска растёт слева направо, имитируя выезжающую из-под главного окна
+    шторку.
     """
     if target_w is None:
         target_w = panel.width() or 380
@@ -1088,58 +1098,85 @@ def slide_panel_in(panel, anchor, target_w=None, target_h=None, duration=220):
         target_h = anchor.height()
     final_x = anchor.x() + anchor.width() - 8
     target_y = anchor.y()
-    # tucked: панель чуть-чуть «выглядывает» за левую границу anchor.x+width-target_w
-    start_x = anchor.x() + anchor.width() - target_w + 4
 
-    panel.resize(target_w, target_h)
-    panel.move(start_x, target_y)
+    panel.setGeometry(final_x, target_y, target_w, target_h)
+    panel._slide_target = (final_x, target_y, target_w, target_h)
+
+    def _apply(reveal):
+        try:
+            reveal = int(reveal)
+        except (TypeError, ValueError):
+            return
+        if reveal < _PANEL_HIDDEN_REVEAL:
+            reveal = _PANEL_HIDDEN_REVEAL
+        if reveal > target_w:
+            reveal = target_w
+        panel.setMask(QRegion(0, 0, reveal, target_h))
+
+    _apply(_PANEL_HIDDEN_REVEAL)
     panel.show()
-    # поднимаем main выше — чтобы панель буквально выезжала из-под него
-    try:
-        anchor.raise_()
-    except Exception:
-        pass
+    panel.raise_()
+    panel.activateWindow()
 
-    panel._tucked_pos = (start_x, target_y)
-    panel._extended_pos = (final_x, target_y)
-    panel._anchor_ref = anchor
-
-    anim = QPropertyAnimation(panel, b"pos")
+    anim = QVariantAnimation()
     anim.setDuration(duration)
-    anim.setStartValue(QPoint(start_x, target_y))
-    anim.setEndValue(QPoint(final_x, target_y))
+    anim.setStartValue(_PANEL_HIDDEN_REVEAL)
+    anim.setEndValue(target_w)
     anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+    anim.valueChanged.connect(_apply)
+
+    def _finished():
+        _gc_anim(anim)
+        try:
+            panel.clearMask()
+        except Exception:
+            pass
+
+    anim.finished.connect(_finished)
     _active_animations.append(anim)
-    anim.finished.connect(lambda a=anim: _gc_anim(a))
     anim.start()
     return anim
 
 
-def slide_panel_out(panel, duration=180):
-    """Уезд панели обратно за правый край anchor."""
-    tucked = getattr(panel, "_tucked_pos", None)
-    if tucked is None:
+def slide_panel_out(panel, duration=200):
+    """Уезд панели обратно за правый край anchor (маска сжимается налево)."""
+    target = getattr(panel, "_slide_target", None)
+    if target is None:
         try:
             panel.hide()
         except Exception:
             pass
         return None
-    start = panel.pos()
-    end = QPoint(*tucked)
-    anim = QPropertyAnimation(panel, b"pos")
+    _x, _y, target_w, target_h = target
+
+    def _apply(reveal):
+        try:
+            reveal = int(reveal)
+        except (TypeError, ValueError):
+            return
+        if reveal < _PANEL_HIDDEN_REVEAL:
+            reveal = _PANEL_HIDDEN_REVEAL
+        if reveal > target_w:
+            reveal = target_w
+        panel.setMask(QRegion(0, 0, reveal, target_h))
+
+    anim = QVariantAnimation()
     anim.setDuration(duration)
-    anim.setStartValue(start)
-    anim.setEndValue(end)
+    anim.setStartValue(target_w)
+    anim.setEndValue(_PANEL_HIDDEN_REVEAL)
     anim.setEasingCurve(QEasingCurve.Type.InCubic)
-    _active_animations.append(anim)
+    anim.valueChanged.connect(_apply)
 
     def _done():
         _gc_anim(anim)
         try:
+            panel.clearMask()
             panel.hide()
         except Exception:
             pass
+
     anim.finished.connect(_done)
+    _active_animations.append(anim)
     anim.start()
     return anim
 
@@ -1149,7 +1186,7 @@ def slide_panel_out(panel, duration=180):
 # ──────────────────────────────────────────────
 _DIALOG_CONTAINER_QSS = """
 #DialogContainer {
-    background: rgba(6, 10, 28, 245);
+    background: rgb(6, 10, 28);
     border: 1px solid rgba(0, 180, 255, 90);
     border-radius: 20px;
 }
@@ -1794,10 +1831,13 @@ class dg4VPNApp(QWidget):
         path.addRoundedRect(0, 0, w, h, 24, 24)
         p.setClipPath(path)
 
+        # фон главного окна полностью непрозрачный — иначе Qt рендерит
+        # текст на translucent-поверхности без субпиксельного сглаживания
+        # и буквы выглядят размыто
         overlay = QLinearGradient(0, 0, 0, h)
-        overlay.setColorAt(0.0, QColor(8,  12, 34, 175))
-        overlay.setColorAt(0.5, QColor(6,  10, 28, 185))
-        overlay.setColorAt(1.0, QColor(4,  8,  22, 195))
+        overlay.setColorAt(0.0, QColor(8,  12, 34, 255))
+        overlay.setColorAt(0.5, QColor(6,  10, 28, 255))
+        overlay.setColorAt(1.0, QColor(4,  8,  22, 255))
         p.fillRect(0, 0, w, h, QBrush(overlay))
 
         radial = QRadialGradient(w / 2, 0, w * 0.8)
