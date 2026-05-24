@@ -632,7 +632,7 @@ class RingWidget(QWidget):
                 p.drawEllipse(int(sx-size//2), int(sy-size//2), size, size)
 
         p.setPen(QPen(self._status_color))
-        font = QFont("Lexend", 22, QFont.Weight.Bold)
+        font = QFont("Inter", 22, QFont.Weight.Bold)
         p.setFont(font)
         p.drawText(QRect(cx-70, cy-22, 140, 44),
                    Qt.AlignmentFlag.AlignCenter, self._status_text)
@@ -738,7 +738,7 @@ class SpeedGraphWidget(QWidget):
         # данные
         if psutil is None:
             p.setPen(QColor(255, 200, 80, 200))
-            p.setFont(QFont("Lexend", 9))
+            p.setFont(QFont("Inter", 9))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
                        "psutil не установлен — pip install psutil")
             p.end()
@@ -793,7 +793,7 @@ class SpeedGraphWidget(QWidget):
 
         # тексты сверху
         p.setPen(QColor(120, 200, 255))
-        p.setFont(QFont("Lexend", 8, QFont.Weight.Bold))
+        p.setFont(QFont("Inter", 8, QFont.Weight.Bold))
         p.drawText(10, 12, f"▼ {self._fmt(self._cur_down)}")
         p.setPen(QColor(170, 130, 255))
         right_text = f"▲ {self._fmt(self._cur_up)}"
@@ -834,9 +834,9 @@ class InfoCard(QWidget):
             tl.setContentsMargins(14, 8, 14, 8)
             tl.setSpacing(3)
             lbl = QLabel(label)
-            lbl.setStyleSheet("color: rgba(130,165,210,200); font-family: Lexend; font-size: 8px; font-weight: bold; letter-spacing: 1px; background: transparent;")
+            lbl.setStyleSheet("color: rgba(130,165,210,200); font-family: Inter; font-size: 8px; font-weight: bold; letter-spacing: 1px; background: transparent;")
             val = QLabel(value)
-            val.setStyleSheet(f"color: {color}; font-family: Lexend; font-size: 13px; font-weight: bold; background: transparent;")
+            val.setStyleSheet(f"color: {color}; font-family: Inter; font-size: 13px; font-weight: bold; background: transparent;")
             tl.addWidget(lbl)
             tl.addWidget(val)
             layout.addWidget(tile, 1)
@@ -847,7 +847,7 @@ class InfoCard(QWidget):
             self.rows[key].setText(text)
             if color:
                 self.rows[key].setStyleSheet(
-                    f"color: {color}; font-family: Lexend; font-size: 13px; font-weight: bold; background: transparent;")
+                    f"color: {color}; font-family: Inter; font-size: 13px; font-weight: bold; background: transparent;")
 
     def _tick(self):
         step = 15 if self._hover else -15
@@ -995,7 +995,7 @@ class ConnectButton(QWidget):
         p.fillPath(hi, QColor(255, 255, 255, int(28 + 12*self._glow)))
 
         p.setPen(QColor(255, 255, 255))
-        font = QFont("Lexend", 11, QFont.Weight.Bold)
+        font = QFont("Inter", 11, QFont.Weight.Bold)
         font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.5)
         p.setFont(font)
         p.drawText(QRect(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, self._text)
@@ -1062,7 +1062,7 @@ class SmallButton(QWidget):
 
         tc = QColor(int(200 + 55*self._fill), int(230 + 25*self._fill), 255)
         p.setPen(tc)
-        p.setFont(QFont("Lexend", 8, QFont.Weight.Bold))
+        p.setFont(QFont("Inter", 8, QFont.Weight.Bold))
         p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._text)
         p.end()
 
@@ -1190,17 +1190,17 @@ _DIALOG_CONTAINER_QSS = """
     border: 1px solid rgba(0, 180, 255, 90);
     border-radius: 20px;
 }
-QLabel { color: #dce8ff; font-family: Lexend; }
+QLabel { color: #dce8ff; font-family: Inter; }
 QLineEdit {
     background: rgba(8, 14, 38, 230);
     color: #e2f0ff;
     border: 1px solid rgba(0, 180, 255, 60);
     border-radius: 8px;
     padding: 6px 10px;
-    font-family: Lexend; font-size: 11px;
+    font-family: Inter; font-size: 11px;
 }
 QLineEdit:focus { border-color: rgba(0, 210, 255, 200); }
-QCheckBox { color: #dce8ff; font-family: Lexend; font-size: 11px; spacing: 8px; }
+QCheckBox { color: #dce8ff; font-family: Inter; font-size: 11px; spacing: 8px; }
 QCheckBox::indicator {
     width: 16px; height: 16px; border-radius: 4px;
     border: 1px solid rgba(0, 180, 255, 90);
@@ -1216,7 +1216,7 @@ QPushButton {
     border: 1px solid rgba(0, 200, 255, 100);
     border-radius: 8px;
     padding: 5px 12px;
-    font-family: Lexend; font-size: 10px; font-weight: bold;
+    font-family: Inter; font-size: 10px; font-weight: bold;
 }
 QPushButton:hover { background: rgba(0, 200, 255, 80); color: #fff; }
 QPushButton:pressed { background: rgba(0, 160, 220, 130); }
@@ -1257,7 +1257,7 @@ QTabBar::tab {
     margin-right: 4px;
     border-top-left-radius: 8px;
     border-top-right-radius: 8px;
-    font-family: Lexend; font-size: 10px; font-weight: bold;
+    font-family: Inter; font-size: 10px; font-weight: bold;
     letter-spacing: 1px;
 }
 QTabBar::tab:selected {
@@ -1305,7 +1305,7 @@ class HistoryWindow(QDialog):
 
         title_row = QHBoxLayout()
         title = QLabel("ИСТОРИЯ УЗЛОВ")
-        title.setStyleSheet("color: #00d2ff; font-family: Lexend; font-size: 14px; font-weight: bold; letter-spacing: 1px;")
+        title.setStyleSheet("color: #00d2ff; font-family: Inter; font-size: 14px; font-weight: bold; letter-spacing: 1px;")
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(30, 30)
         close_btn.setStyleSheet("color: #94a3b8; background: transparent; border: none; font-size: 16px;")
@@ -1338,19 +1338,19 @@ class HistoryWindow(QDialog):
             top_row = QHBoxLayout()
             flag = HistoryManager.get_flag(key.get("country", "??"))
             name = QLabel(f"{flag} {key.get('name', 'Unnamed')[:25]}")
-            name.setStyleSheet("color: #e2e8f0; font-family: Lexend; font-size: 11px; font-weight: bold;")
+            name.setStyleSheet("color: #e2e8f0; font-family: Inter; font-size: 11px; font-weight: bold;")
 
             ping = QLabel(f"{key.get('latency', 0)} ms")
-            ping.setStyleSheet("color: #4ade80; font-family: Lexend; font-size: 10px;")
+            ping.setStyleSheet("color: #4ade80; font-family: Inter; font-size: 10px;")
             top_row.addWidget(name)
             top_row.addStretch()
             top_row.addWidget(ping)
 
             bottom_row = QHBoxLayout()
             time_ago = QLabel(HistoryManager.format_time_ago(key.get("timestamp", 0)))
-            time_ago.setStyleSheet("color: #94a3b8; font-family: Lexend; font-size: 9px;")
+            time_ago.setStyleSheet("color: #94a3b8; font-family: Inter; font-size: 9px;")
             protocol = QLabel(key.get("protocol", "vless").upper())
-            protocol.setStyleSheet("color: #8b5cf6; font-family: Lexend; font-size: 9px; font-weight: bold;")
+            protocol.setStyleSheet("color: #8b5cf6; font-family: Inter; font-size: 9px; font-weight: bold;")
             bottom_row.addWidget(time_ago)
             bottom_row.addStretch()
             bottom_row.addWidget(protocol)
@@ -1399,9 +1399,9 @@ class RegionWindow(QDialog):
         # шапка
         title_row = QHBoxLayout()
         title = QLabel("РЕГИОНЫ")
-        title.setStyleSheet("color: #00d2ff; font-family: Lexend; font-size: 14px; font-weight: bold; letter-spacing: 1px;")
+        title.setStyleSheet("color: #00d2ff; font-family: Inter; font-size: 14px; font-weight: bold; letter-spacing: 1px;")
         self.status_label = QLabel("Найдено: 0")
-        self.status_label.setStyleSheet("color: #94a3b8; font-family: Lexend; font-size: 10px;")
+        self.status_label.setStyleSheet("color: #94a3b8; font-family: Inter; font-size: 10px;")
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(30, 30)
         close_btn.setStyleSheet("color: #94a3b8; background: transparent; border: none; font-size: 16px;")
@@ -1413,7 +1413,7 @@ class RegionWindow(QDialog):
         container_layout.addLayout(title_row)
 
         hint = QLabel("Кликните по узлу, чтобы переключиться на него.\nСписок пополняется по мере фонового сканирования.")
-        hint.setStyleSheet("color: #7ab8e0; font-family: Lexend; font-size: 9px;")
+        hint.setStyleSheet("color: #7ab8e0; font-family: Inter; font-size: 9px;")
         hint.setWordWrap(True)
         container_layout.addWidget(hint)
 
@@ -1466,20 +1466,20 @@ class RegionWindow(QDialog):
 
         left = QVBoxLayout()
         title_lbl = QLabel(f"{flag}  {full_name}")
-        title_lbl.setStyleSheet("color: #e2f0ff; font-family: Lexend; font-size: 11px; font-weight: bold;")
+        title_lbl.setStyleSheet("color: #e2f0ff; font-family: Inter; font-size: 11px; font-weight: bold;")
         sub = QLabel(key_data.get("name", "Unnamed")[:30])
-        sub.setStyleSheet("color: #7ab8e0; font-family: Lexend; font-size: 9px;")
+        sub.setStyleSheet("color: #7ab8e0; font-family: Inter; font-size: 9px;")
         left.addWidget(title_lbl)
         left.addWidget(sub)
 
         right = QVBoxLayout()
         proto = QLabel(key_data.get("protocol", "vless").upper())
-        proto.setStyleSheet("color: #a78bfa; font-family: Lexend; font-size: 9px; font-weight: bold;")
+        proto.setStyleSheet("color: #a78bfa; font-family: Inter; font-size: 9px; font-weight: bold;")
         proto.setAlignment(Qt.AlignmentFlag.AlignRight)
         latency = key_data.get("latency")
         ping_text = f"{latency} ms" if latency else f"{country}"
         ping = QLabel(ping_text)
-        ping.setStyleSheet("color: #4ade80; font-family: Lexend; font-size: 10px;")
+        ping.setStyleSheet("color: #4ade80; font-family: Inter; font-size: 10px;")
         ping.setAlignment(Qt.AlignmentFlag.AlignRight)
         right.addWidget(proto)
         right.addWidget(ping)
@@ -1533,7 +1533,7 @@ class SettingsWindow(QDialog):
         # шапка
         title_row = QHBoxLayout()
         title = QLabel("НАСТРОЙКИ")
-        title.setStyleSheet("color: #00d2ff; font-family: Lexend; font-size: 14px; font-weight: bold; letter-spacing: 1px;")
+        title.setStyleSheet("color: #00d2ff; font-family: Inter; font-size: 14px; font-weight: bold; letter-spacing: 1px;")
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(30, 30)
         close_btn.setStyleSheet("color: #94a3b8; background: transparent; border: none; font-size: 16px;")
@@ -1877,7 +1877,7 @@ class dg4VPNApp(QWidget):
         dot = QLabel("◉")
         dot.setStyleSheet("color: #00d2ff; font-size: 13px; background: transparent; padding-right: 2px;")
         title = QLabel("dg4VPN")
-        title.setStyleSheet("color: #dce8ff; font-family: Lexend; font-size: 14px; font-weight: bold; letter-spacing: 1px; background: transparent;")
+        title.setStyleSheet("color: #dce8ff; font-family: Inter; font-size: 14px; font-weight: bold; letter-spacing: 1px; background: transparent;")
         logo_row = QHBoxLayout(logo_w)
         logo_row.setContentsMargins(0,0,0,0); logo_row.setSpacing(4)
         logo_row.addWidget(dot); logo_row.addWidget(title)
@@ -2296,7 +2296,7 @@ class dg4VPNApp(QWidget):
 
 # ──────────────────────────────────────────────
 def _load_bundled_fonts(app):
-    """Подгрузить локальный Lexend, чтобы UI не зависел от того, установлен
+    """Подгрузить локальный Inter, чтобы UI не зависел от того, установлен
     ли шрифт в системе. Без этого на чистых Windows Qt падает на стандартный
     растровый fallback (Arial/Tahoma в малых кеглях рендерится «крошкой»)."""
     base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
