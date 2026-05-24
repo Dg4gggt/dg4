@@ -140,7 +140,7 @@ from PyQt6.QtWidgets import (
     QLineEdit, QCheckBox, QScrollArea, QSizePolicy,
 )
 from PyQt6.QtCore import (
-    Qt, QTimer, QThread, pyqtSignal, QRect,
+    Qt, QTimer, QThread, pyqtSignal, QRect, QSize,
     QPropertyAnimation, QVariantAnimation, QEasingCurve, QPoint,
 )
 from PyQt6.QtGui import (
@@ -1332,25 +1332,27 @@ class HistoryWindow(QDialog):
             item = QListWidgetItem()
             widget = QWidget()
             w_layout = QVBoxLayout(widget)
-            w_layout.setContentsMargins(5, 5, 5, 5)
-            w_layout.setSpacing(2)
+            w_layout.setContentsMargins(8, 6, 8, 6)
+            w_layout.setSpacing(4)
 
             top_row = QHBoxLayout()
+            top_row.setSpacing(8)
             flag = HistoryManager.get_flag(key.get("country", "??"))
             name = QLabel(f"{flag} {key.get('name', 'Unnamed')[:25]}")
-            name.setStyleSheet("color: #e2e8f0; font-family: Inter; font-size: 11px; font-weight: bold;")
+            name.setStyleSheet("color: #e2e8f0; font-family: Inter; font-size: 12px; font-weight: bold; background: transparent;")
 
             ping = QLabel(f"{key.get('latency', 0)} ms")
-            ping.setStyleSheet("color: #4ade80; font-family: Inter; font-size: 10px;")
+            ping.setStyleSheet("color: #4ade80; font-family: Inter; font-size: 11px; background: transparent;")
             top_row.addWidget(name)
             top_row.addStretch()
             top_row.addWidget(ping)
 
             bottom_row = QHBoxLayout()
+            bottom_row.setSpacing(8)
             time_ago = QLabel(HistoryManager.format_time_ago(key.get("timestamp", 0)))
-            time_ago.setStyleSheet("color: #94a3b8; font-family: Inter; font-size: 9px;")
+            time_ago.setStyleSheet("color: #94a3b8; font-family: Inter; font-size: 10px; background: transparent;")
             protocol = QLabel(key.get("protocol", "vless").upper())
-            protocol.setStyleSheet("color: #8b5cf6; font-family: Inter; font-size: 9px; font-weight: bold;")
+            protocol.setStyleSheet("color: #8b5cf6; font-family: Inter; font-size: 10px; font-weight: bold; background: transparent;")
             bottom_row.addWidget(time_ago)
             bottom_row.addStretch()
             bottom_row.addWidget(protocol)
@@ -1358,7 +1360,11 @@ class HistoryWindow(QDialog):
             w_layout.addLayout(top_row)
             w_layout.addLayout(bottom_row)
 
-            item.setSizeHint(widget.sizeHint())
+            # QListWidget::item имеет padding 8px + border 1px вокруг ⇒ ~18px съедается
+            # из высоты строки. Без компенсации widget внутри получает меньше места,
+            # чем sizeHint() ожидает, и весь layout сплющивается.
+            hint = widget.sizeHint()
+            item.setSizeHint(QSize(hint.width(), max(hint.height(), 56) + 20))
             item.setData(Qt.ItemDataRole.UserRole, key)
             self.list.addItem(item)
             self.list.setItemWidget(item, widget)
@@ -1458,28 +1464,31 @@ class RegionWindow(QDialog):
         item = QListWidgetItem()
         widget = QWidget()
         wl = QHBoxLayout(widget)
-        wl.setContentsMargins(6, 4, 6, 4)
+        wl.setContentsMargins(8, 6, 8, 6)
+        wl.setSpacing(8)
 
         flag = HistoryManager.get_flag(key_data.get("country", "??"))
         country = (key_data.get("country") or "??").upper()
         full_name = country_name(country) if country != "??" else "Неизвестно"
 
         left = QVBoxLayout()
+        left.setSpacing(2)
         title_lbl = QLabel(f"{flag}  {full_name}")
-        title_lbl.setStyleSheet("color: #e2f0ff; font-family: Inter; font-size: 11px; font-weight: bold;")
+        title_lbl.setStyleSheet("color: #e2f0ff; font-family: Inter; font-size: 12px; font-weight: bold; background: transparent;")
         sub = QLabel(key_data.get("name", "Unnamed")[:30])
-        sub.setStyleSheet("color: #7ab8e0; font-family: Inter; font-size: 9px;")
+        sub.setStyleSheet("color: #7ab8e0; font-family: Inter; font-size: 10px; background: transparent;")
         left.addWidget(title_lbl)
         left.addWidget(sub)
 
         right = QVBoxLayout()
+        right.setSpacing(2)
         proto = QLabel(key_data.get("protocol", "vless").upper())
-        proto.setStyleSheet("color: #a78bfa; font-family: Inter; font-size: 9px; font-weight: bold;")
+        proto.setStyleSheet("color: #a78bfa; font-family: Inter; font-size: 10px; font-weight: bold; background: transparent;")
         proto.setAlignment(Qt.AlignmentFlag.AlignRight)
         latency = key_data.get("latency")
         ping_text = f"{latency} ms" if latency else f"{country}"
         ping = QLabel(ping_text)
-        ping.setStyleSheet("color: #4ade80; font-family: Inter; font-size: 10px;")
+        ping.setStyleSheet("color: #4ade80; font-family: Inter; font-size: 11px; background: transparent;")
         ping.setAlignment(Qt.AlignmentFlag.AlignRight)
         right.addWidget(proto)
         right.addWidget(ping)
@@ -1487,7 +1496,10 @@ class RegionWindow(QDialog):
         wl.addLayout(left, 1)
         wl.addLayout(right)
 
-        item.setSizeHint(widget.sizeHint())
+        # компенсируем padding 8px + border 1px у QListWidget::item — иначе
+        # содержимое строки сжимается и текст выглядит «сплющенным»
+        hint = widget.sizeHint()
+        item.setSizeHint(QSize(hint.width(), max(hint.height(), 56) + 20))
         item.setData(Qt.ItemDataRole.UserRole, key_data)
         self.list.addItem(item)
         self.list.setItemWidget(item, widget)
