@@ -141,6 +141,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import (
     Qt, QTimer, QThread, pyqtSignal, QRect,
+    QPropertyAnimation, QEasingCurve,
 )
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QLinearGradient,
@@ -1056,6 +1057,67 @@ class SmallButton(QWidget):
 
 
 # ──────────────────────────────────────────────
+#  ВЫЕЗЖАЮЩИЕ ПАНЕЛИ (slide-out)
+# ──────────────────────────────────────────────
+_active_animations = []  # удерживаем ссылки, чтобы анимации не собирались GC
+
+
+def _gc_anim(anim):
+    try:
+        _active_animations.remove(anim)
+    except ValueError:
+        pass
+
+
+def slide_panel_in(panel, anchor, target_w=None, target_h=None, duration=260):
+    """Прицепить panel к правому краю anchor и анимированно выехать вправо.
+    Возвращает анимацию (для возможной отмены)."""
+    if target_w is None:
+        target_w = panel.width() or 380
+    if target_h is None:
+        target_h = anchor.height()
+    target_x = anchor.x() + anchor.width() - 8
+    target_y = anchor.y()
+    # стартуем шириной 1 (как будто прячется за главным окном)
+    panel.setGeometry(target_x, target_y, 1, target_h)
+    panel.show()
+    panel.raise_()
+    panel.activateWindow()
+    anim = QPropertyAnimation(panel, b"geometry")
+    anim.setDuration(duration)
+    anim.setStartValue(QRect(target_x, target_y, 1, target_h))
+    anim.setEndValue(QRect(target_x, target_y, target_w, target_h))
+    anim.setEasingCurve(QEasingCurve.Type.OutCubic)
+    _active_animations.append(anim)
+    anim.finished.connect(lambda a=anim: _gc_anim(a))
+    anim.start()
+    panel._slide_target = (target_x, target_y, target_w, target_h)
+    return anim
+
+
+def slide_panel_out(panel, duration=200):
+    """Спрятать панель обратно за главное окно."""
+    geo = panel.geometry()
+    end_geo = QRect(geo.x(), geo.y(), 1, geo.height())
+    anim = QPropertyAnimation(panel, b"geometry")
+    anim.setDuration(duration)
+    anim.setStartValue(geo)
+    anim.setEndValue(end_geo)
+    anim.setEasingCurve(QEasingCurve.Type.InCubic)
+    _active_animations.append(anim)
+
+    def _done():
+        _gc_anim(anim)
+        try:
+            panel.hide()
+        except Exception:
+            pass
+    anim.finished.connect(_done)
+    anim.start()
+    return anim
+
+
+# ──────────────────────────────────────────────
 #  ОБЩАЯ СТИЛИЗАЦИЯ ДИАЛОГОВ
 # ──────────────────────────────────────────────
 _DIALOG_CONTAINER_QSS = """
@@ -1161,8 +1223,12 @@ class HistoryWindow(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("История ключей")
-        self.setFixedSize(360, 450)
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.resize(360, 540)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
         layout = QVBoxLayout(self)
@@ -1179,7 +1245,7 @@ class HistoryWindow(QDialog):
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(30, 30)
         close_btn.setStyleSheet("color: #94a3b8; background: transparent; border: none; font-size: 16px;")
-        close_btn.clicked.connect(self.close)
+        close_btn.clicked.connect(self._animated_close)
         title_row.addWidget(title)
         title_row.addStretch()
         title_row.addWidget(close_btn)
@@ -1191,6 +1257,9 @@ class HistoryWindow(QDialog):
 
         layout.addWidget(self.container)
         self.refresh()
+
+    def _animated_close(self):
+        slide_panel_out(self)
 
     def refresh(self):
         self.list.clear()
@@ -1233,14 +1302,7 @@ class HistoryWindow(QDialog):
     def _on_item_clicked(self, item):
         key = item.data(Qt.ItemDataRole.UserRole)
         self.key_selected.emit(key)
-        self.close()
-
-    def mousePressEvent(self, e):
-        self._drag_pos = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
-
-    def mouseMoveEvent(self, e):
-        if hasattr(self, '_drag_pos'):
-            self.move(e.globalPosition().toPoint() - self._drag_pos)
+        slide_panel_out(self)
 
 
 # ──────────────────────────────────────────────
@@ -1253,8 +1315,12 @@ class RegionWindow(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Регионы")
-        self.setFixedSize(380, 520)
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.resize(380, 620)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
         layout = QVBoxLayout(self)
@@ -1275,7 +1341,7 @@ class RegionWindow(QDialog):
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(30, 30)
         close_btn.setStyleSheet("color: #94a3b8; background: transparent; border: none; font-size: 16px;")
-        close_btn.clicked.connect(self.close)
+        close_btn.clicked.connect(self._animated_close)
         title_row.addWidget(title)
         title_row.addStretch()
         title_row.addWidget(self.status_label)
@@ -1295,6 +1361,9 @@ class RegionWindow(QDialog):
 
         # ключи, известные на данный момент: (link -> data)
         self._known = {}
+
+    def _animated_close(self):
+        slide_panel_out(self)
 
     def reset(self):
         self._known.clear()
@@ -1369,13 +1438,6 @@ class RegionWindow(QDialog):
         if data:
             self.key_selected.emit(data)
 
-    def mousePressEvent(self, e):
-        self._drag_pos = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
-
-    def mouseMoveEvent(self, e):
-        if hasattr(self, '_drag_pos'):
-            self.move(e.globalPosition().toPoint() - self._drag_pos)
-
 
 # ──────────────────────────────────────────────
 #  ОКНО НАСТРОЕК
@@ -1386,8 +1448,12 @@ class SettingsWindow(QDialog):
     def __init__(self, config, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Настройки")
-        self.setFixedSize(460, 580)
-        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.resize(440, 680)
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint
+            | Qt.WindowType.Tool
+            | Qt.WindowType.WindowStaysOnTopHint
+        )
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self._config = dict(config)
 
@@ -1407,7 +1473,7 @@ class SettingsWindow(QDialog):
         close_btn = QPushButton("✕")
         close_btn.setFixedSize(30, 30)
         close_btn.setStyleSheet("color: #94a3b8; background: transparent; border: none; font-size: 16px;")
-        close_btn.clicked.connect(self.close)
+        close_btn.clicked.connect(self._animated_close)
         title_row.addWidget(title)
         title_row.addStretch()
         title_row.addWidget(close_btn)
@@ -1425,7 +1491,7 @@ class SettingsWindow(QDialog):
         save_btn = QPushButton("Сохранить")
         save_btn.clicked.connect(self._save)
         cancel_btn = QPushButton("Отмена")
-        cancel_btn.clicked.connect(self.close)
+        cancel_btn.clicked.connect(self._animated_close)
         reset_btn = QPushButton("По умолчанию")
         reset_btn.clicked.connect(self._reset_defaults)
         btn_row.addWidget(reset_btn)
@@ -1575,7 +1641,10 @@ class SettingsWindow(QDialog):
             updates["hiddify_cli"] = hiddify_path
 
         self.settings_changed.emit(updates)
-        self.close()
+        self._animated_close()
+
+    def _animated_close(self):
+        slide_panel_out(self)
 
     def _reset_defaults(self):
         from vpn_settings import DEFAULTS
@@ -1586,13 +1655,6 @@ class SettingsWindow(QDialog):
         self.tabs.addTab(self._build_protocols_tab(), "Протоколы")
         self.tabs.addTab(self._build_sources_tab(), "Источники")
         self.tabs.addTab(self._build_misc_tab(), "Прочее")
-
-    def mousePressEvent(self, e):
-        self._drag_pos = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
-
-    def mouseMoveEvent(self, e):
-        if hasattr(self, '_drag_pos'):
-            self.move(e.globalPosition().toPoint() - self._drag_pos)
 
 
 # ──────────────────────────────────────────────
@@ -1658,10 +1720,6 @@ class dg4VPNApp(QWidget):
         self.resize(420, 760)
         self._center()
 
-    def resizeEvent(self, e):
-        super().resizeEvent(e)
-        self._apply_mask()
-
     def _apply_mask(self):
         from PyQt6.QtGui import QBitmap, QPainter as QP
         bmp = QBitmap(self.size())
@@ -1681,6 +1739,23 @@ class dg4VPNApp(QWidget):
 
     def moveEvent(self, e):
         super().moveEvent(e)
+        self._reposition_panels()
+
+    def _reposition_panels(self):
+        # держим выезжающие панели приклеенными к правому краю главного окна
+        anchor_x = self.x() + self.width() - 8
+        anchor_y = self.y()
+        for panel in (self.settings_win, self.region_win, self.history_win):
+            if panel and panel.isVisible():
+                panel.move(anchor_x, anchor_y)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self._apply_mask()
+        try:
+            self._reposition_panels()
+        except Exception:
+            pass
 
     def paintEvent(self, e):
         p = QPainter(self)
@@ -1888,38 +1963,49 @@ class dg4VPNApp(QWidget):
         self.raise_()
         self.activateWindow()
 
-    # ── Окна-диалоги ──────────────────────────
+    # ── Окна-диалоги (slide-out панели) ───────
+    def _panels(self):
+        return [self.settings_win, self.region_win, self.history_win]
+
+    def _close_other_panels(self, keep=None):
+        for p in self._panels():
+            if p is None or p is keep:
+                continue
+            if p.isVisible():
+                slide_panel_out(p)
+
     def _show_history(self):
         if self.history_win is None:
             self.history_win = HistoryWindow(self)
             self.history_win.key_selected.connect(self._on_key_selected_from_history)
+        if self.history_win.isVisible():
+            slide_panel_out(self.history_win)
+            return
+        self._close_other_panels(keep=self.history_win)
         self.history_win.refresh()
-        self.history_win.move(self.x() + (self.width() - self.history_win.width()) // 2,
-                              self.y() + (self.height() - self.history_win.height()) // 2)
-        self.history_win.show()
+        slide_panel_in(self.history_win, self, target_w=360, target_h=self.height())
 
     def _show_regions(self):
         if self.region_win is None:
             self.region_win = RegionWindow(self)
             self.region_win.key_selected.connect(self._on_region_selected)
-        self.region_win.move(self.x() + (self.width() - self.region_win.width()) // 2,
-                             self.y() + max(0, (self.height() - self.region_win.height()) // 2))
-        self.region_win.show()
-        # подсветить активный, если есть
+        if self.region_win.isVisible():
+            slide_panel_out(self.region_win)
+            return
+        self._close_other_panels(keep=self.region_win)
+        slide_panel_in(self.region_win, self, target_w=380, target_h=self.height())
         if self.current_key:
             self.region_win.mark_active(self.current_key.get("link"))
 
     def _show_settings(self):
-        if self.settings_win is None:
-            self.settings_win = SettingsWindow(CONFIG, self)
-            self.settings_win.settings_changed.connect(self._apply_settings_update)
-        else:
-            # обновим виджеты в окне на актуальный CONFIG
-            self.settings_win = SettingsWindow(CONFIG, self)
-            self.settings_win.settings_changed.connect(self._apply_settings_update)
-        self.settings_win.move(self.x() + (self.width() - self.settings_win.width()) // 2,
-                               self.y() + max(0, (self.height() - self.settings_win.height()) // 2))
-        self.settings_win.show()
+        # настройки всегда пересоздаём с актуальным CONFIG
+        if self.settings_win is not None and self.settings_win.isVisible():
+            slide_panel_out(self.settings_win)
+            return
+        self._close_other_panels(keep=None)
+        self.settings_win = SettingsWindow(CONFIG, self)
+        self.settings_win.settings_changed.connect(self._apply_settings_update)
+        slide_panel_in(self.settings_win, self, target_w=440, target_h=self.height())
 
     def _apply_settings_update(self, updates):
         SettingsManager.merge_and_save(CONFIG, updates)
