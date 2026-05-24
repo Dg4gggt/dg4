@@ -12,6 +12,11 @@ import math
 import json
 import requests
 
+try:
+    import psutil
+except ImportError:
+    psutil = None
+
 # ──────────────────────────────────────────────
 #  УПРАВЛЕНИЕ СИСТЕМОЙ (ПРОКСИ И ПРОЦЕССЫ)
 # ──────────────────────────────────────────────
@@ -20,29 +25,29 @@ class SystemManager:
     def enable_blur(hwnd, color=0x20100A32):
         """Включает нативный эффект размытия Windows (Acrylic/BlurBehind)."""
         try:
-            from ctypes import windll, c_int, byref, Structure, sizeof, POINTER, c_void_p
-            
+            from ctypes import windll, c_int, byref, Structure, sizeof, POINTER
+
             class AccentPolicy(Structure):
                 _fields_ = [
                     ('AccentState', c_int),
                     ('AccentFlags', c_int),
                     ('GradientColor', c_int),
-                    ('AnimationId', c_int)
+                    ('AnimationId', c_int),
                 ]
 
             class WindowCompositionAttributeData(Structure):
                 _fields_ = [
                     ('Attribute', c_int),
                     ('Data', POINTER(AccentPolicy)),
-                    ('SizeOfData', c_int)
+                    ('SizeOfData', c_int),
                 ]
 
             accent = AccentPolicy()
-            accent.AccentState = 3  # ACCENT_ENABLE_BLURBEHIND (или 4 для Acrylic)
-            accent.GradientColor = color # ABGR формат
+            accent.AccentState = 3
+            accent.GradientColor = color
 
             data = WindowCompositionAttributeData()
-            data.Attribute = 19  # WCA_ACCENT_POLICY
+            data.Attribute = 19
             data.SizeOfData = sizeof(accent)
             data.Data = byref(accent)
 
@@ -58,8 +63,7 @@ class SystemManager:
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path, 0, winreg.KEY_WRITE) as key:
                 winreg.SetValueEx(key, "ProxyEnable", 0, winreg.REG_DWORD, 1 if enable else 0)
                 winreg.SetValueEx(key, "ProxyServer", 0, winreg.REG_SZ, f"{host}:{port}")
-            
-            # Оповещаем систему об изменениях
+
             ctypes.windll.Wininet.InternetSetOptionW(0, 39, 0, 0)
             ctypes.windll.Wininet.InternetSetOptionW(0, 37, 0, 0)
             logger.info(f"Системный прокси {'включен' if enable else 'выключен'}")
@@ -69,15 +73,16 @@ class SystemManager:
     @staticmethod
     def kill_hiddify():
         try:
-            # Сначала пробуем мягко через taskkill
             subprocess.run(["taskkill", "/F", "/IM", "HiddifyCli.exe"],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
             pass
 
+
 def _emergency_proxy_off():
     SystemManager.set_proxy(False)
     SystemManager.kill_hiddify()
+
 
 atexit.register(_emergency_proxy_off)
 for _sig in (signal.SIGTERM, signal.SIGINT, signal.SIGABRT):
@@ -86,14 +91,17 @@ for _sig in (signal.SIGTERM, signal.SIGINT, signal.SIGABRT):
     except (OSError, ValueError):
         pass
 
+
 def set_system_proxy(enable=True, host="127.0.0.1", port=12334):
     SystemManager.set_proxy(enable, host, port)
+
 
 def is_admin():
     try:
         return bool(ctypes.windll.shell32.IsUserAnAdmin())
     except Exception:
         return False
+
 
 # ──────────────────────────────────────────────
 #  ЛОГИРОВАНИЕ
@@ -119,40 +127,36 @@ except ImportError:
     pystray = None
 
 from vpn_logic import VPNLogic
+from vpn_settings import SettingsManager
+from vpn_notify import ToastNotifier, country_name
 
 # ──────────────────────────────────────────────
 #  PyQt6
 # ──────────────────────────────────────────────
 from PyQt6.QtWidgets import (
     QApplication, QWidget, QLabel, QPushButton,
-    QVBoxLayout, QHBoxLayout, QTextEdit, QFrame, QGraphicsDropShadowEffect
+    QVBoxLayout, QHBoxLayout, QTextEdit, QFrame,
+    QDialog, QListWidget, QListWidgetItem, QTabWidget,
+    QLineEdit, QCheckBox, QScrollArea, QSizePolicy,
 )
 from PyQt6.QtCore import (
-    Qt, QTimer, QThread, pyqtSignal, QPoint, QPropertyAnimation,
-    QEasingCurve, QRect, pyqtProperty, QObject
+    Qt, QTimer, QThread, pyqtSignal, QRect,
 )
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QLinearGradient,
     QRadialGradient, QFont, QPainterPath, QConicalGradient,
-    QFontDatabase
 )
 
 # ──────────────────────────────────────────────
-#  КОНФИГУРАЦИЯ
+#  КОНФИГ — загружается из settings.json
 # ──────────────────────────────────────────────
-CONFIG = {
-    "hotkey": "ctrl+alt+b",
-    "pause_hotkey": "ctrl+alt+p",
-    "excluded_countries": ["RU", "BY"],
-    "priority_protocols": ["reality", "vless", "trojan"],
-    "hiddify_cli": os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "vpn_launcher", "HiddifyCli.exe"
-    )
-}
+CONFIG = SettingsManager.load()
+ToastNotifier.set_enabled(bool(CONFIG.get("notifications_enabled", True)))
 
 _CACHE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".last_key.json")
 _HISTORY_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.json")
 _LOG_MAX_LINES = 200
+
 
 # ──────────────────────────────────────────────
 #  ИСТОРИЯ КЛЮЧЕЙ
@@ -162,16 +166,11 @@ class HistoryManager:
     def save_key(key_data):
         try:
             history = HistoryManager.load_history()
-            # Добавляем временную метку
+            key_data = dict(key_data)
             key_data["timestamp"] = time.time()
-            
-            # Уникальность по ссылке
-            history = [k for k in history if k['link'] != key_data['link']]
+            history = [k for k in history if k.get('link') != key_data.get('link')]
             history.insert(0, key_data)
-            
-            # Ограничиваем историю (например, последние 50)
             history = history[:50]
-            
             with open(_HISTORY_FILE, "w", encoding="utf-8") as f:
                 json.dump(history, f, ensure_ascii=False, indent=2)
         except Exception as e:
@@ -183,11 +182,11 @@ class HistoryManager:
             if os.path.exists(_HISTORY_FILE):
                 with open(_HISTORY_FILE, "r", encoding="utf-8") as f:
                     history = json.load(f)
-                    # Фильтруем ключи старше 24 часов
                     now = time.time()
                     history = [k for k in history if now - k.get("timestamp", 0) < 86400]
                     return history
-        except Exception: pass
+        except Exception:
+            pass
         return []
 
     @staticmethod
@@ -203,10 +202,9 @@ class HistoryManager:
     def get_flag(country_code):
         if not country_code or country_code == "??":
             return "🏳"
-        # Конвертация кода страны в эмодзи флаг
         try:
             return "".join(chr(127397 + ord(c)) for c in country_code.upper())
-        except:
+        except Exception:
             return "🏳"
 
 
@@ -225,23 +223,34 @@ C = {
     "blue":     QColor(0,   200, 255),
 }
 
+
 # ──────────────────────────────────────────────
-#  WORKER THREAD — запускает логику в фоне
+#  WORKER — поиск + продолжение в фоне
 # ──────────────────────────────────────────────
 class VPNWorker(QThread):
-    log_signal       = pyqtSignal(str)
-    connected_signal = pyqtSignal(dict)
+    log_signal          = pyqtSignal(str)
+    connected_signal    = pyqtSignal(dict)
     disconnected_signal = pyqtSignal()
-    status_signal    = pyqtSignal(str, str)   # text, color_name
+    status_signal       = pyqtSignal(str, str)
+    new_key_signal      = pyqtSignal(dict)
+    scan_done_signal    = pyqtSignal()
 
-    def __init__(self, logic, action, key=None, use_cache=True):
+    def __init__(self, logic, action, key=None, use_cache=True, config=None):
         super().__init__()
-        self.logic  = logic
-        self.action = action   # "connect" | "resume"
-        self.key    = key
+        self.logic = logic
+        self.action = action
+        self.key = key
         self.use_cache = use_cache
-        self._lock  = threading.Lock()
+        self.config = config or {}
+        self._lock = threading.Lock()
         self.vpn_process = None
+        self._stop_flag = False
+        self._bg_thread = None
+        self._all_candidates = []   # все распарсенные ключи (для фонового продолжения)
+
+    # ── публичный API ──
+    def stop(self):
+        self._stop_flag = True
 
     def run(self):
         if self.action == "connect":
@@ -249,11 +258,11 @@ class VPNWorker(QThread):
         elif self.action == "resume":
             self._resume()
 
+    # ── основной цикл ──
     def _connect(self):
         self.status_signal.emit("...", "yellow")
         self.log_signal.emit("Поиск лучших узлов...")
 
-        # Кэш (используем только если use_cache=True)
         if self.use_cache:
             cached = self._load_cache()
             if cached:
@@ -261,6 +270,7 @@ class VPNWorker(QThread):
                 if self._try_key(cached):
                     self._save_cache(cached)
                     self.connected_signal.emit(cached)
+                    self._start_background_scan()
                     return
                 self.log_signal.emit("Кэш устарел, ищу новые...")
         else:
@@ -271,13 +281,18 @@ class VPNWorker(QThread):
             self.log_signal.emit("Ключи не найдены")
             self.disconnected_signal.emit()
             return
+        self._all_candidates = list(best_keys)
 
-        for i, key_data in enumerate(best_keys[:15]):
+        for i, key_data in enumerate(best_keys[:20]):
+            if self._stop_flag:
+                return
             self.log_signal.emit(f"Тест узла {i+1}...")
             self._kill_hiddify()
             if self._try_key(key_data):
                 self._save_cache(key_data)
                 self.connected_signal.emit(key_data)
+                # после первого успеха запускаем фоновое сканирование остальных
+                self._start_background_scan(skip_link=key_data.get("link"))
                 return
 
         self.log_signal.emit("Нет рабочих узлов")
@@ -288,25 +303,101 @@ class VPNWorker(QThread):
         if self.key and self._try_key(self.key):
             self._save_cache(self.key)
             self.connected_signal.emit(self.key)
+            self._start_background_scan(skip_link=self.key.get("link"))
             return
         self.log_signal.emit("Сбой возобновления, ищу новый...")
         self._connect()
 
+    # ── фоновое сканирование после первого успеха ──
+    def _start_background_scan(self, skip_link=None):
+        if not self.config.get("background_scan_enabled", True):
+            return
+        if self._bg_thread and self._bg_thread.is_alive():
+            return
+
+        def runner():
+            try:
+                self._background_scan(skip_link=skip_link)
+            except Exception as e:
+                logger.debug(f"background scan crash: {e}")
+            finally:
+                try:
+                    self.scan_done_signal.emit()
+                except Exception:
+                    pass
+
+        self._bg_thread = threading.Thread(target=runner, daemon=True)
+        self._bg_thread.start()
+
+    def _background_scan(self, skip_link=None):
+        """Лёгкий пинг + резолв страны для всех найденных ключей.
+        Активному соединению не мешает — без перезапуска hiddify."""
+        candidates = self._all_candidates
+        if not candidates:
+            # если зашли через cache/resume — сгребём с нуля
+            self.log_signal.emit("Фоновый поиск регионов...")
+            candidates = self.logic.scrape_keys()
+        max_tests = int(self.config.get("max_background_tests") or 60)
+        tested_total = 0
+        for k in candidates:
+            if self._stop_flag:
+                return
+            if tested_total >= max_tests:
+                break
+            link = k.get("link")
+            if not link or link == skip_link:
+                continue
+            if not self.logic.test_key(k):
+                continue
+            tested_total += 1
+            # пробуем определить страну через GeoIP (без прокси, по IP)
+            country = self._resolve_country(k.get("host"))
+            if country:
+                k = dict(k)
+                k["country"] = country
+                try:
+                    self.new_key_signal.emit(k)
+                except Exception:
+                    pass
+
+    _GEO_CACHE = {}
+    _GEO_LOCK = threading.Lock()
+
+    def _resolve_country(self, host):
+        if not host:
+            return None
+        with self._GEO_LOCK:
+            if host in self._GEO_CACHE:
+                return self._GEO_CACHE[host]
+        try:
+            ip = host
+            try:
+                ip = socket.gethostbyname(host)
+            except Exception:
+                pass
+            res = requests.get(f"https://ipapi.co/{ip}/country/", timeout=4)
+            if res.status_code == 200:
+                code = (res.text or "").strip()[:2].upper()
+                if code and code.isalpha():
+                    with self._GEO_LOCK:
+                        self._GEO_CACHE[host] = code
+                    return code
+        except Exception:
+            pass
+        return None
+
+    # ── активация ключа (hiddify) ──
     def _try_key(self, key_data) -> bool:
         SystemManager.kill_hiddify()
         if not self._start_hiddify(key_data):
             return False
         SystemManager.set_proxy(True, "127.0.0.1", 12334)
-        
-        # Защищенная проверка доступности прокси через методы vpn_logic
+
         gpt_ok = False
         try:
             if hasattr(self.logic, 'check_chatgpt_via_proxy'):
                 gpt_ok, _ = self.logic.check_chatgpt_via_proxy()
-            elif hasattr(self.logic, 'check_gemini_via_proxy'):
-                gpt_ok, _ = self.logic.check_gemini_via_proxy()
             else:
-                # Если методов проверки нет, делаем базовый запрос как fallback
                 proxies = {"http": "socks5h://127.0.0.1:12334", "https": "socks5h://127.0.0.1:12334"}
                 requests.get("https://www.google.com", proxies=proxies, timeout=5)
                 gpt_ok = True
@@ -316,7 +407,7 @@ class VPNWorker(QThread):
 
         if not gpt_ok:
             return False
-            
+
         return self._fetch_ip_country(key_data)
 
     def _start_hiddify(self, key_data) -> bool:
@@ -329,7 +420,6 @@ class VPNWorker(QThread):
                    "--in-proxy-port", "12334", "--system-proxy",
                    "--fragment", "--log-level", "warn"]
             with self._lock:
-                # Используем создание процесса в отдельной группе, чтобы легче управлять
                 self.vpn_process = subprocess.Popen(
                     cmd, cwd=os.path.dirname(CONFIG["hiddify_cli"]),
                     creationflags=subprocess.CREATE_NO_WINDOW | subprocess.CREATE_NEW_PROCESS_GROUP,
@@ -352,7 +442,6 @@ class VPNWorker(QThread):
             self.vpn_process = None
         if proc:
             try:
-                # Пробуем мягко завершить группу процессов
                 proc.terminate()
                 proc.wait(timeout=2)
             except Exception:
@@ -376,33 +465,35 @@ class VPNWorker(QThread):
         try:
             with open(_CACHE_FILE, "w", encoding="utf-8") as f:
                 json.dump(key_data, f)
-        except Exception: pass
+        except Exception:
+            pass
 
     def _load_cache(self):
         try:
             if os.path.exists(_CACHE_FILE):
                 with open(_CACHE_FILE, "r", encoding="utf-8") as f:
                     return json.load(f)
-        except Exception: pass
+        except Exception:
+            pass
         return None
 
 
 # ──────────────────────────────────────────────
-#  КОЛЬЦО СТАТУСА  (двойная орбита + частицы)
+#  КОЛЬЦО СТАТУСА
 # ──────────────────────────────────────────────
 class RingWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedSize(240, 240)
-        self._status_text  = "OFF"
+        self.setFixedSize(220, 220)
+        self._status_text = "OFF"
         self._status_color = C["red"]
-        self._angle        = 0          # угол спиннера
-        self._orbit2       = 0          # вторая орбита (обратная)
-        self._spinning     = False
-        self._pulse        = 0.0        # 0..1 для pulsing glow
-        self._pulse_dir    = 1
-        self._particles    = []         # [(angle, radius, alpha, speed)]
-        self._border_pos   = 0.0
+        self._angle = 0
+        self._orbit2 = 0
+        self._spinning = False
+        self._pulse = 0.0
+        self._pulse_dir = 1
+        self._particles = []
+        self._border_pos = 0.0
 
         self._spin_timer = QTimer(self)
         self._spin_timer.timeout.connect(self._tick_spin)
@@ -416,9 +507,8 @@ class RingWidget(QWidget):
         self._border_timer.start(16)
 
     def set_status(self, text, color_name):
-        self._status_text  = text
+        self._status_text = text
         self._status_color = C.get(color_name, C["red"])
-        # Перезапускаем частицы при смене статуса
         self._spawn_burst()
         self.update()
 
@@ -431,22 +521,20 @@ class RingWidget(QWidget):
             self.update()
 
     def _spawn_burst(self):
-        """Запускаем всплеск частиц при смене статуса."""
         import random
         self._particles = [
-            [random.uniform(0, 360), random.uniform(60, 90),
+            [random.uniform(0, 360), random.uniform(55, 85),
              255, random.uniform(1.5, 3.5)]
             for _ in range(18)
         ]
 
     def _tick_spin(self):
-        self._angle   = (self._angle  + 4)   % 360
-        self._orbit2  = (self._orbit2 - 2.5) % 360
-        # Обновляем частицы
+        self._angle = (self._angle + 4) % 360
+        self._orbit2 = (self._orbit2 - 2.5) % 360
         alive = []
         for p in self._particles:
-            p[1] += p[3]          # radius растёт
-            p[2] = max(0, p[2] - 8)  # fade
+            p[1] += p[3]
+            p[2] = max(0, p[2] - 8)
             if p[2] > 0:
                 alive.append(p)
         self._particles = alive
@@ -467,9 +555,8 @@ class RingWidget(QWidget):
     def paintEvent(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        cx, cy, r = 120, 120, 88
+        cx, cy, r = self.width() // 2, self.height() // 2, 80
 
-        # ── Частицы (позади всего) ──
         for pt in self._particles:
             ang, rad, alpha, _ = pt
             px = cx + rad * math.cos(math.radians(ang))
@@ -478,7 +565,6 @@ class RingWidget(QWidget):
             p.setBrush(QBrush(pc)); p.setPen(Qt.PenStyle.NoPen)
             p.drawEllipse(int(px-3), int(py-3), 6, 6)
 
-        # ── Внешнее pulsing glow ──
         glow_r = r + 28 + int(self._pulse * 14)
         glow = QRadialGradient(cx, cy, glow_r)
         gc = QColor(self._status_color)
@@ -489,7 +575,6 @@ class RingWidget(QWidget):
         p.setBrush(QBrush(glow)); p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(cx - glow_r, cy - glow_r, glow_r * 2, glow_r * 2)
 
-        # ── Фоновый glass-круг ──
         bg_grad = QRadialGradient(cx, cy, r)
         bg_grad.setColorAt(0, QColor(20, 30, 70, 210))
         bg_grad.setColorAt(0.6, QColor(10, 16, 45, 220))
@@ -497,7 +582,6 @@ class RingWidget(QWidget):
         p.setBrush(QBrush(bg_grad)); p.setPen(Qt.PenStyle.NoPen)
         p.drawEllipse(cx - r, cy - r, r * 2, r * 2)
 
-        # ── Внутренний glass-блик (сверху) ──
         hi_grad = QLinearGradient(cx - r, cy - r, cx + r, cy)
         hi_grad.setColorAt(0, QColor(255, 255, 255, 18))
         hi_grad.setColorAt(1, QColor(255, 255, 255, 0))
@@ -505,27 +589,23 @@ class RingWidget(QWidget):
         hi_path.addEllipse(cx - r + 2, cy - r + 2, r * 2 - 4, r - 4)
         p.fillPath(hi_path, QBrush(hi_grad))
 
-        # ── Орбита 1: бегущая дуга (циан) ──
         pen1 = QPen(C["accent"]); pen1.setWidth(2)
         pen1.setCapStyle(Qt.PenCapStyle.RoundCap)
         p.setPen(pen1); p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawArc(cx-r-6, cy-r-6, (r+6)*2, (r+6)*2,
                   int(self._border_pos * 16), 80 * 16)
 
-        # ── Орбита 2: обратная дуга (фиолетовая) ──
         pen2 = QPen(C["accent2"]); pen2.setWidth(2)
         pen2.setCapStyle(Qt.PenCapStyle.RoundCap)
         p.setPen(pen2); p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawArc(cx-r-6, cy-r-6, (r+6)*2, (r+6)*2,
                   int(self._orbit2 * 16), 50 * 16)
 
-        # ── Кольца статуса ──
         for radius, width, alpha in [(r, 2, 220), (r-16, 4, 160), (r-26, 1, 60)]:
             col = QColor(self._status_color); col.setAlpha(alpha)
             p.setPen(QPen(col, width)); p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawEllipse(cx-radius, cy-radius, radius*2, radius*2)
 
-        # ── Спиннер (светящаяся капля) ──
         if self._spinning:
             for offset, size, alpha in [(0, 10, 240), (-18, 7, 140), (-36, 5, 70)]:
                 ang = self._angle + offset
@@ -534,7 +614,6 @@ class RingWidget(QWidget):
                 sc = QColor(C["accent"]); sc.setAlpha(alpha)
                 p.setBrush(QBrush(sc)); p.setPen(Qt.PenStyle.NoPen)
                 p.drawEllipse(int(sx-size//2), int(sy-size//2), size, size)
-            # Вторая капля обратного направления
             for offset, size, alpha in [(0, 8, 180), (-22, 5, 100)]:
                 ang = self._orbit2 + offset
                 sx = cx + (r - 10) * math.cos(math.radians(ang))
@@ -543,9 +622,8 @@ class RingWidget(QWidget):
                 p.setBrush(QBrush(sc)); p.setPen(Qt.PenStyle.NoPen)
                 p.drawEllipse(int(sx-size//2), int(sy-size//2), size, size)
 
-        # ── Центральный текст ──
         p.setPen(QPen(self._status_color))
-        font = QFont("Lexend", 24, QFont.Weight.Bold)
+        font = QFont("Lexend", 22, QFont.Weight.Bold)
         p.setFont(font)
         p.drawText(QRect(cx-70, cy-22, 140, 44),
                    Qt.AlignmentFlag.AlignCenter, self._status_text)
@@ -554,15 +632,177 @@ class RingWidget(QWidget):
 
 
 # ──────────────────────────────────────────────
-#  КАРТОЧКА ИНФО — горизонтальные плитки (glass)
+#  ГРАФИК СКОРОСТИ (psutil)
+# ──────────────────────────────────────────────
+class SpeedGraphWidget(QWidget):
+    """Линейный график download/upload за последние 60 секунд."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedHeight(72)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._max_points = 60
+        self._down = [0.0] * self._max_points
+        self._up = [0.0] * self._max_points
+        self._cur_down = 0.0
+        self._cur_up = 0.0
+        self._last_recv = None
+        self._last_sent = None
+        self._last_ts = None
+
+        self._poll = QTimer(self)
+        self._poll.timeout.connect(self._sample)
+        self._poll.start(1000)
+
+        self._anim = QTimer(self)
+        self._anim.timeout.connect(self.update)
+        self._anim.start(60)
+
+    def reset(self):
+        self._down = [0.0] * self._max_points
+        self._up = [0.0] * self._max_points
+        self._cur_down = 0.0
+        self._cur_up = 0.0
+        self._last_recv = None
+        self._last_sent = None
+        self._last_ts = None
+        self.update()
+
+    def _sample(self):
+        if psutil is None:
+            return
+        try:
+            io = psutil.net_io_counters()
+            now = time.time()
+            if self._last_recv is None:
+                self._last_recv = io.bytes_recv
+                self._last_sent = io.bytes_sent
+                self._last_ts = now
+                return
+            dt = max(1e-3, now - self._last_ts)
+            d_recv = max(0, io.bytes_recv - self._last_recv) / dt
+            d_sent = max(0, io.bytes_sent - self._last_sent) / dt
+            self._last_recv = io.bytes_recv
+            self._last_sent = io.bytes_sent
+            self._last_ts = now
+            self._cur_down = d_recv
+            self._cur_up = d_sent
+            self._down.append(d_recv); self._down = self._down[-self._max_points:]
+            self._up.append(d_sent); self._up = self._up[-self._max_points:]
+        except Exception:
+            pass
+
+    @staticmethod
+    def _fmt(rate):
+        # rate в байтах/сек
+        units = [("B/s", 1), ("KB/s", 1024), ("MB/s", 1024**2), ("GB/s", 1024**3)]
+        for unit, scale in reversed(units):
+            if rate >= scale or unit == "B/s":
+                val = rate / scale
+                return f"{val:.1f} {unit}"
+        return "0 B/s"
+
+    def paintEvent(self, e):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        w, h = self.width(), self.height()
+        # фон
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, w, h, 12, 12)
+        bg = QLinearGradient(0, 0, 0, h)
+        bg.setColorAt(0, QColor(10, 18, 50, 200))
+        bg.setColorAt(1, QColor(6, 10, 30, 210))
+        p.fillPath(path, QBrush(bg))
+
+        # рамка
+        p.setPen(QPen(QColor(0, 200, 255, 60), 1))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(path)
+
+        # сетка
+        p.setPen(QPen(QColor(0, 200, 255, 20), 1, Qt.PenStyle.DotLine))
+        for i in range(1, 4):
+            y = int(h * i / 4)
+            p.drawLine(8, y, w - 8, y)
+
+        # данные
+        if psutil is None:
+            p.setPen(QColor(255, 200, 80, 200))
+            p.setFont(QFont("Lexend", 9))
+            p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
+                       "psutil не установлен — pip install psutil")
+            p.end()
+            return
+
+        max_val = max(self._down + self._up + [1.0])
+        # лёгкое сглаживание шкалы
+        max_val = max_val * 1.1
+
+        def build_path(series, base_offset_y=0):
+            pth = QPainterPath()
+            n = len(series)
+            if n == 0:
+                return pth
+            usable_w = w - 16
+            usable_h = h - 22
+            x0 = 8
+            y0 = 18
+            for i, v in enumerate(series):
+                x = x0 + (i * usable_w / (self._max_points - 1))
+                y = y0 + usable_h - (v / max_val) * usable_h
+                if i == 0:
+                    pth.moveTo(x, y)
+                else:
+                    pth.lineTo(x, y)
+            return pth
+
+        # download (cyan)
+        pen_dl = QPen(C["accent"], 1.8)
+        pen_dl.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+        pen_dl.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen_dl)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawPath(build_path(self._down))
+
+        # заливка под линией скачивания
+        fill = QPainterPath(build_path(self._down))
+        fill.lineTo(w - 8, h - 4)
+        fill.lineTo(8, h - 4)
+        fill.closeSubpath()
+        grad = QLinearGradient(0, 18, 0, h)
+        grad.setColorAt(0, QColor(0, 210, 255, 90))
+        grad.setColorAt(1, QColor(0, 210, 255, 0))
+        p.fillPath(fill, QBrush(grad))
+
+        # upload (purple)
+        pen_up = QPen(C["accent2"], 1.6)
+        pen_up.setStyle(Qt.PenStyle.SolidLine)
+        pen_up.setCapStyle(Qt.PenCapStyle.RoundCap)
+        p.setPen(pen_up)
+        p.drawPath(build_path(self._up))
+
+        # тексты сверху
+        p.setPen(QColor(120, 200, 255))
+        p.setFont(QFont("Lexend", 8, QFont.Weight.Bold))
+        p.drawText(10, 12, f"▼ {self._fmt(self._cur_down)}")
+        p.setPen(QColor(170, 130, 255))
+        right_text = f"▲ {self._fmt(self._cur_up)}"
+        fm = p.fontMetrics()
+        tw = fm.horizontalAdvance(right_text)
+        p.drawText(w - tw - 10, 12, right_text)
+        p.end()
+
+
+# ──────────────────────────────────────────────
+#  ИНФО-КАРТОЧКА
 # ──────────────────────────────────────────────
 class InfoCard(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(86)
+        self.setFixedHeight(82)
         self._hover = False
         self._hover_alpha = 0
-        self._shimmer = 0.0       # 0..1 бегущий блик
+        self._shimmer = 0.0
         self._shimmer_dir = 1
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
@@ -625,14 +865,12 @@ class InfoCard(QWidget):
         path = QPainterPath()
         path.addRoundedRect(0, 0, w, h, 16, 16)
 
-        # Glass фон
         grad = QLinearGradient(0, 0, w, h)
         grad.setColorAt(0, QColor(18, 26, 72, 200 + self._hover_alpha // 6))
         grad.setColorAt(0.5, QColor(12, 20, 58, 185))
         grad.setColorAt(1, QColor(8, 14, 40, 195))
         p.fillPath(path, QBrush(grad))
 
-        # Бегущий блик (shimmer) по горизонтали при hover
         if self._hover_alpha > 0 and self._shimmer > 0:
             sx = int(self._shimmer * (w + 80)) - 80
             shimmer_grad = QLinearGradient(sx, 0, sx + 80, 0)
@@ -641,19 +879,16 @@ class InfoCard(QWidget):
             shimmer_grad.setColorAt(1,   QColor(255, 255, 255, 0))
             p.fillPath(path, QBrush(shimmer_grad))
 
-        # Разделители между плитками
         p.setPen(QPen(QColor(0, 180, 255, 30), 1))
         tile_w = w // 3
         for i in (1, 2):
             p.drawLine(tile_w * i, 12, tile_w * i, h - 12)
 
-        # Рамка
         border_alpha = 55 + int(self._hover_alpha * 0.7)
         pen = QPen(QColor(0, 200, 255, border_alpha), 1)
         p.setPen(pen); p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(path)
 
-        # Top highlight
         hi = QPainterPath()
         hi.addRoundedRect(1, 1, w - 2, h // 2, 14, 14)
         p.fillPath(hi, QColor(255, 255, 255, 10 + self._hover_alpha // 14))
@@ -661,20 +896,20 @@ class InfoCard(QWidget):
 
 
 # ──────────────────────────────────────────────
-#  КНОПКА ПОДКЛЮЧЕНИЯ — широкая, pill-форма, ripple-анимация
+#  КНОПКИ
 # ──────────────────────────────────────────────
 class ConnectButton(QWidget):
     clicked = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setFixedHeight(52)
+        self.setFixedHeight(50)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._text  = "ПОДКЛЮЧИТЬ"
+        self._text = "ПОДКЛЮЧИТЬ"
         self._hover = False
         self._press = False
-        self._glow  = 0.0
-        self._ripple_r   = 0.0          # радиус ripple
+        self._glow = 0.0
+        self._ripple_r = 0.0
         self._ripple_alpha = 0.0
         self._ripple_x = 0
         self._ripple_y = 0
@@ -688,7 +923,7 @@ class ConnectButton(QWidget):
         self._glow += 0.07 if self._hover else -0.07
         self._glow = max(0.0, min(1.0, self._glow))
         if self._ripple_r > 0:
-            self._ripple_r    += 6
+            self._ripple_r += 6
             self._ripple_alpha = max(0.0, self._ripple_alpha - 8)
         self.update()
         if not self._hover and self._glow <= 0 and self._ripple_alpha <= 0:
@@ -718,7 +953,6 @@ class ConnectButton(QWidget):
         path = QPainterPath()
         path.addRoundedRect(0, 0, w, h, h // 2, h // 2)
 
-        # Градиент фона — циан→фиолетовый
         g = QLinearGradient(0, 0, w, h)
         if self._press:
             g.setColorAt(0, QColor(0,  140, 200))
@@ -729,7 +963,6 @@ class ConnectButton(QWidget):
             g.setColorAt(1, QColor(int(100 + 40*t),  int(20  + 10*t), int(200 + 30*t)))
         p.fillPath(path, QBrush(g))
 
-        # Ripple
         if self._ripple_r > 0 and self._ripple_alpha > 0:
             p.setClipPath(path)
             rc = QColor(255, 255, 255, int(self._ripple_alpha))
@@ -738,7 +971,6 @@ class ConnectButton(QWidget):
             p.drawEllipse(self._ripple_x - rr, self._ripple_y - rr, rr*2, rr*2)
             p.setClipping(False)
 
-        # Glow снаружи
         if self._glow > 0:
             for i in range(1, 4):
                 gp = QPainterPath()
@@ -747,12 +979,10 @@ class ConnectButton(QWidget):
                 p.setPen(QPen(gc2, 1)); p.setBrush(Qt.BrushStyle.NoBrush)
                 p.drawPath(gp)
 
-        # Glass-блик
         hi = QPainterPath()
         hi.addRoundedRect(4, 2, w-8, h//2-2, h//2-2, h//2-2)
         p.fillPath(hi, QColor(255, 255, 255, int(28 + 12*self._glow)))
 
-        # Текст
         p.setPen(QColor(255, 255, 255))
         font = QFont("Lexend", 11, QFont.Weight.Bold)
         font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.5)
@@ -761,20 +991,17 @@ class ConnectButton(QWidget):
         p.end()
 
 
-# ──────────────────────────────────────────────
-#  МАЛАЯ КНОПКА — с анимированной заливкой
-# ──────────────────────────────────────────────
 class SmallButton(QWidget):
     clicked = pyqtSignal()
 
     def __init__(self, icon_text, parent=None):
         super().__init__(parent)
-        self.setFixedSize(108, 38)
+        self.setFixedSize(86, 36)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self._text  = icon_text
+        self._text = icon_text
         self._hover = False
         self._press = False
-        self._fill  = 0.0       # 0..1 fill animation
+        self._fill = 0.0
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
 
@@ -802,13 +1029,11 @@ class SmallButton(QWidget):
         path = QPainterPath()
         path.addRoundedRect(0, 0, w, h, 10, 10)
 
-        # Фон: от тёмного к cyan при hover
         bg = QLinearGradient(0, 0, w, h)
         bg.setColorAt(0, QColor(16, 24, 60, int(160 + 60*self._fill)))
         bg.setColorAt(1, QColor(8,  16, 45, int(150 + 50*self._fill)))
         p.fillPath(path, QBrush(bg))
 
-        # Цветная заливка снизу вверх при hover
         if self._fill > 0:
             fill_h = int(h * self._fill)
             clip = QPainterPath()
@@ -818,24 +1043,118 @@ class SmallButton(QWidget):
             fill_grad.setColorAt(1, QColor(120, 40, 255, int(60 * self._fill)))
             p.fillPath(clip, QBrush(fill_grad))
 
-        # Рамка
         bc = QColor(0, 200, 255, int(50 + 130 * self._fill))
         if self._press: bc = QColor(0, 220, 255, 220)
         p.setPen(QPen(bc, 1.2)); p.setBrush(Qt.BrushStyle.NoBrush)
         p.drawPath(path)
 
-        # Текст
         tc = QColor(int(200 + 55*self._fill), int(230 + 25*self._fill), 255)
         p.setPen(tc)
-        p.setFont(QFont("Lexend", 9, QFont.Weight.Bold))
+        p.setFont(QFont("Lexend", 8, QFont.Weight.Bold))
         p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._text)
         p.end()
+
+
+# ──────────────────────────────────────────────
+#  ОБЩАЯ СТИЛИЗАЦИЯ ДИАЛОГОВ
+# ──────────────────────────────────────────────
+_DIALOG_CONTAINER_QSS = """
+#DialogContainer {
+    background: rgba(6, 10, 28, 245);
+    border: 1px solid rgba(0, 180, 255, 90);
+    border-radius: 20px;
+}
+QLabel { color: #dce8ff; font-family: Lexend; }
+QLineEdit {
+    background: rgba(8, 14, 38, 230);
+    color: #e2f0ff;
+    border: 1px solid rgba(0, 180, 255, 60);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-family: Lexend; font-size: 11px;
+}
+QLineEdit:focus { border-color: rgba(0, 210, 255, 200); }
+QCheckBox { color: #dce8ff; font-family: Lexend; font-size: 11px; spacing: 8px; }
+QCheckBox::indicator {
+    width: 16px; height: 16px; border-radius: 4px;
+    border: 1px solid rgba(0, 180, 255, 90);
+    background: rgba(8, 14, 38, 200);
+}
+QCheckBox::indicator:checked {
+    background: #00d2ff;
+    border-color: #00d2ff;
+}
+QPushButton {
+    color: #dce8ff;
+    background: rgba(0, 180, 255, 40);
+    border: 1px solid rgba(0, 200, 255, 100);
+    border-radius: 8px;
+    padding: 5px 12px;
+    font-family: Lexend; font-size: 10px; font-weight: bold;
+}
+QPushButton:hover { background: rgba(0, 200, 255, 80); color: #fff; }
+QPushButton:pressed { background: rgba(0, 160, 220, 130); }
+QListWidget {
+    background: transparent;
+    border: 1px solid rgba(0, 180, 255, 30);
+    border-radius: 12px;
+    outline: none;
+    padding: 4px;
+}
+QListWidget::item {
+    background: rgba(10, 16, 48, 180);
+    border-radius: 10px;
+    margin-bottom: 6px;
+    padding: 8px;
+    border: 1px solid rgba(0, 160, 255, 30);
+    color: #dce8ff;
+}
+QListWidget::item:hover {
+    background: rgba(0, 40, 80, 200);
+    border-color: rgba(0, 200, 255, 80);
+}
+QListWidget::item:selected {
+    background: rgba(0, 140, 220, 160);
+    border-color: rgba(0, 220, 255, 200);
+    color: #fff;
+}
+QTabWidget::pane {
+    border: 1px solid rgba(0, 180, 255, 60);
+    border-radius: 12px;
+    top: -1px;
+    background: rgba(8, 14, 38, 180);
+}
+QTabBar::tab {
+    background: rgba(10, 18, 50, 200);
+    color: #94a3b8;
+    padding: 8px 14px;
+    margin-right: 4px;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    font-family: Lexend; font-size: 10px; font-weight: bold;
+    letter-spacing: 1px;
+}
+QTabBar::tab:selected {
+    background: rgba(0, 140, 220, 130);
+    color: #fff;
+}
+QScrollBar:vertical { background: transparent; width: 6px; }
+QScrollBar::handle:vertical { background: rgba(0,180,255,90); border-radius: 3px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+QTextEdit {
+    background: rgba(8, 14, 38, 230);
+    color: #e2f0ff;
+    border: 1px solid rgba(0, 180, 255, 60);
+    border-radius: 8px;
+    padding: 6px;
+    font-family: 'Consolas','JetBrains Mono', monospace; font-size: 10px;
+}
+"""
+
 
 # ──────────────────────────────────────────────
 #  ОКНО ИСТОРИИ
 # ──────────────────────────────────────────────
-from PyQt6.QtWidgets import QDialog, QScrollArea, QListWidget, QListWidgetItem
-
 class HistoryWindow(QDialog):
     key_selected = pyqtSignal(dict)
 
@@ -845,22 +1164,15 @@ class HistoryWindow(QDialog):
         self.setFixedSize(360, 450)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
-        
-        # Контейнер с фоном
+
         self.container = QFrame()
-        self.container.setObjectName("HistoryContainer")
-        self.container.setStyleSheet("""
-            #HistoryContainer {
-                background: rgba(6, 10, 28, 245);
-                border: 1px solid rgba(0, 180, 255, 90);
-                border-radius: 20px;
-            }
-        """)
+        self.container.setObjectName("DialogContainer")
+        self.container.setStyleSheet(_DIALOG_CONTAINER_QSS)
         container_layout = QVBoxLayout(self.container)
-        
+
         title_row = QHBoxLayout()
         title = QLabel("ИСТОРИЯ УЗЛОВ")
         title.setStyleSheet("color: #00d2ff; font-family: Lexend; font-size: 14px; font-weight: bold; letter-spacing: 1px;")
@@ -874,27 +1186,9 @@ class HistoryWindow(QDialog):
         container_layout.addLayout(title_row)
 
         self.list = QListWidget()
-        self.list.setStyleSheet("""
-            QListWidget {
-                background: transparent;
-                border: none;
-                outline: none;
-            }
-            QListWidget::item {
-                background: rgba(10, 16, 48, 180);
-                border-radius: 12px;
-                margin-bottom: 8px;
-                padding: 10px;
-                border: 1px solid rgba(0, 160, 255, 30);
-            }
-            QListWidget::item:hover {
-                background: rgba(0, 40, 80, 200);
-                border-color: rgba(0, 200, 255, 80);
-            }
-        """)
         self.list.itemClicked.connect(self._on_item_clicked)
         container_layout.addWidget(self.list)
-        
+
         layout.addWidget(self.container)
         self.refresh()
 
@@ -907,18 +1201,18 @@ class HistoryWindow(QDialog):
             w_layout = QVBoxLayout(widget)
             w_layout.setContentsMargins(5, 5, 5, 5)
             w_layout.setSpacing(2)
-            
+
             top_row = QHBoxLayout()
             flag = HistoryManager.get_flag(key.get("country", "??"))
             name = QLabel(f"{flag} {key.get('name', 'Unnamed')[:25]}")
             name.setStyleSheet("color: #e2e8f0; font-family: Lexend; font-size: 11px; font-weight: bold;")
-            
+
             ping = QLabel(f"{key.get('latency', 0)} ms")
             ping.setStyleSheet("color: #4ade80; font-family: Lexend; font-size: 10px;")
             top_row.addWidget(name)
             top_row.addStretch()
             top_row.addWidget(ping)
-            
+
             bottom_row = QHBoxLayout()
             time_ago = QLabel(HistoryManager.format_time_ago(key.get("timestamp", 0)))
             time_ago.setStyleSheet("color: #94a3b8; font-family: Lexend; font-size: 9px;")
@@ -927,10 +1221,10 @@ class HistoryWindow(QDialog):
             bottom_row.addWidget(time_ago)
             bottom_row.addStretch()
             bottom_row.addWidget(protocol)
-            
+
             w_layout.addLayout(top_row)
             w_layout.addLayout(bottom_row)
-            
+
             item.setSizeHint(widget.sizeHint())
             item.setData(Qt.ItemDataRole.UserRole, key)
             self.list.addItem(item)
@@ -940,6 +1234,358 @@ class HistoryWindow(QDialog):
         key = item.data(Qt.ItemDataRole.UserRole)
         self.key_selected.emit(key)
         self.close()
+
+    def mousePressEvent(self, e):
+        self._drag_pos = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, e):
+        if hasattr(self, '_drag_pos'):
+            self.move(e.globalPosition().toPoint() - self._drag_pos)
+
+
+# ──────────────────────────────────────────────
+#  ОКНО ВЫБОРА РЕГИОНА
+# ──────────────────────────────────────────────
+class RegionWindow(QDialog):
+    """Список регионов с рабочими ключами. Заполняется по мере поиска."""
+    key_selected = pyqtSignal(dict)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Регионы")
+        self.setFixedSize(380, 520)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(15, 15, 15, 15)
+
+        self.container = QFrame()
+        self.container.setObjectName("DialogContainer")
+        self.container.setStyleSheet(_DIALOG_CONTAINER_QSS)
+        container_layout = QVBoxLayout(self.container)
+        container_layout.setSpacing(8)
+
+        # шапка
+        title_row = QHBoxLayout()
+        title = QLabel("РЕГИОНЫ")
+        title.setStyleSheet("color: #00d2ff; font-family: Lexend; font-size: 14px; font-weight: bold; letter-spacing: 1px;")
+        self.status_label = QLabel("Найдено: 0")
+        self.status_label.setStyleSheet("color: #94a3b8; font-family: Lexend; font-size: 10px;")
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(30, 30)
+        close_btn.setStyleSheet("color: #94a3b8; background: transparent; border: none; font-size: 16px;")
+        close_btn.clicked.connect(self.close)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        title_row.addWidget(self.status_label)
+        title_row.addWidget(close_btn)
+        container_layout.addLayout(title_row)
+
+        hint = QLabel("Кликните по узлу, чтобы переключиться на него.\nСписок пополняется по мере фонового сканирования.")
+        hint.setStyleSheet("color: #7ab8e0; font-family: Lexend; font-size: 9px;")
+        hint.setWordWrap(True)
+        container_layout.addWidget(hint)
+
+        self.list = QListWidget()
+        self.list.itemClicked.connect(self._on_item_clicked)
+        container_layout.addWidget(self.list, 1)
+
+        layout.addWidget(self.container)
+
+        # ключи, известные на данный момент: (link -> data)
+        self._known = {}
+
+    def reset(self):
+        self._known.clear()
+        self.list.clear()
+        self._update_status()
+
+    def add_key(self, key_data):
+        link = key_data.get("link")
+        if not link:
+            return
+        if link in self._known:
+            # обновим страну если стала известна
+            self._known[link].update(key_data)
+        else:
+            self._known[link] = dict(key_data)
+            self._add_row(self._known[link])
+        self._update_status()
+
+    def mark_active(self, link):
+        for i in range(self.list.count()):
+            it = self.list.item(i)
+            data = it.data(Qt.ItemDataRole.UserRole)
+            if data and data.get("link") == link:
+                self.list.setCurrentItem(it)
+                break
+
+    def _add_row(self, key_data):
+        item = QListWidgetItem()
+        widget = QWidget()
+        wl = QHBoxLayout(widget)
+        wl.setContentsMargins(6, 4, 6, 4)
+
+        flag = HistoryManager.get_flag(key_data.get("country", "??"))
+        country = (key_data.get("country") or "??").upper()
+        full_name = country_name(country) if country != "??" else "Неизвестно"
+
+        left = QVBoxLayout()
+        title_lbl = QLabel(f"{flag}  {full_name}")
+        title_lbl.setStyleSheet("color: #e2f0ff; font-family: Lexend; font-size: 11px; font-weight: bold;")
+        sub = QLabel(key_data.get("name", "Unnamed")[:30])
+        sub.setStyleSheet("color: #7ab8e0; font-family: Lexend; font-size: 9px;")
+        left.addWidget(title_lbl)
+        left.addWidget(sub)
+
+        right = QVBoxLayout()
+        proto = QLabel(key_data.get("protocol", "vless").upper())
+        proto.setStyleSheet("color: #a78bfa; font-family: Lexend; font-size: 9px; font-weight: bold;")
+        proto.setAlignment(Qt.AlignmentFlag.AlignRight)
+        latency = key_data.get("latency")
+        ping_text = f"{latency} ms" if latency else f"{country}"
+        ping = QLabel(ping_text)
+        ping.setStyleSheet("color: #4ade80; font-family: Lexend; font-size: 10px;")
+        ping.setAlignment(Qt.AlignmentFlag.AlignRight)
+        right.addWidget(proto)
+        right.addWidget(ping)
+
+        wl.addLayout(left, 1)
+        wl.addLayout(right)
+
+        item.setSizeHint(widget.sizeHint())
+        item.setData(Qt.ItemDataRole.UserRole, key_data)
+        self.list.addItem(item)
+        self.list.setItemWidget(item, widget)
+
+    def _update_status(self):
+        n = len(self._known)
+        countries = {(k.get("country") or "??") for k in self._known.values()}
+        self.status_label.setText(f"Узлов: {n} • Стран: {len(countries)}")
+
+    def _on_item_clicked(self, item):
+        data = item.data(Qt.ItemDataRole.UserRole)
+        if data:
+            self.key_selected.emit(data)
+
+    def mousePressEvent(self, e):
+        self._drag_pos = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
+
+    def mouseMoveEvent(self, e):
+        if hasattr(self, '_drag_pos'):
+            self.move(e.globalPosition().toPoint() - self._drag_pos)
+
+
+# ──────────────────────────────────────────────
+#  ОКНО НАСТРОЕК
+# ──────────────────────────────────────────────
+class SettingsWindow(QDialog):
+    settings_changed = pyqtSignal(dict)
+
+    def __init__(self, config, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Настройки")
+        self.setFixedSize(460, 580)
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._config = dict(config)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(15, 15, 15, 15)
+
+        self.container = QFrame()
+        self.container.setObjectName("DialogContainer")
+        self.container.setStyleSheet(_DIALOG_CONTAINER_QSS)
+        cl = QVBoxLayout(self.container)
+        cl.setSpacing(8)
+
+        # шапка
+        title_row = QHBoxLayout()
+        title = QLabel("НАСТРОЙКИ")
+        title.setStyleSheet("color: #00d2ff; font-family: Lexend; font-size: 14px; font-weight: bold; letter-spacing: 1px;")
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(30, 30)
+        close_btn.setStyleSheet("color: #94a3b8; background: transparent; border: none; font-size: 16px;")
+        close_btn.clicked.connect(self.close)
+        title_row.addWidget(title)
+        title_row.addStretch()
+        title_row.addWidget(close_btn)
+        cl.addLayout(title_row)
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_hotkeys_tab(), "Горячие клавиши")
+        self.tabs.addTab(self._build_protocols_tab(), "Протоколы")
+        self.tabs.addTab(self._build_sources_tab(), "Источники")
+        self.tabs.addTab(self._build_misc_tab(), "Прочее")
+        cl.addWidget(self.tabs, 1)
+
+        # нижние кнопки
+        btn_row = QHBoxLayout()
+        save_btn = QPushButton("Сохранить")
+        save_btn.clicked.connect(self._save)
+        cancel_btn = QPushButton("Отмена")
+        cancel_btn.clicked.connect(self.close)
+        reset_btn = QPushButton("По умолчанию")
+        reset_btn.clicked.connect(self._reset_defaults)
+        btn_row.addWidget(reset_btn)
+        btn_row.addStretch()
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(save_btn)
+        cl.addLayout(btn_row)
+
+        layout.addWidget(self.container)
+
+    # ── вкладки ──
+    def _build_hotkeys_tab(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(10)
+
+        v.addWidget(QLabel("Введите комбинации в виде «ctrl+alt+B»."))
+
+        def row(label_text, key):
+            h = QHBoxLayout()
+            lbl = QLabel(label_text)
+            lbl.setFixedWidth(170)
+            edit = QLineEdit(self._config.get(key, ""))
+            edit.setPlaceholderText("например, ctrl+alt+b")
+            h.addWidget(lbl)
+            h.addWidget(edit, 1)
+            return h, edit
+
+        h1, self.ed_hotkey = row("Подключение / отключение:", "hotkey")
+        h2, self.ed_pause = row("Пауза / возобновление:", "pause_hotkey")
+        h3, self.ed_regions = row("Окно регионов:", "regions_hotkey")
+        v.addLayout(h1)
+        v.addLayout(h2)
+        v.addLayout(h3)
+        v.addStretch()
+        return w
+
+    def _build_protocols_tab(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(8)
+
+        v.addWidget(QLabel("Выберите протоколы, которые скрипт будет искать и тестировать:"))
+
+        current = {p.lower() for p in (self._config.get("priority_protocols") or [])}
+        self._proto_checks = {}
+        for code, label in [
+            ("reality", "Reality (приоритет)"),
+            ("vless",   "VLESS"),
+            ("trojan",  "Trojan"),
+            ("shadowsocks", "Shadowsocks (ss://)"),
+            ("vmess",   "VMess"),
+        ]:
+            cb = QCheckBox(label)
+            cb.setChecked(code in current)
+            v.addWidget(cb)
+            self._proto_checks[code] = cb
+
+        v.addSpacing(10)
+        v.addWidget(QLabel("Исключённые страны (через запятую, ISO коды):"))
+        self.ed_excluded = QLineEdit(",".join(self._config.get("excluded_countries") or []))
+        v.addWidget(self.ed_excluded)
+        v.addStretch()
+        return w
+
+    def _build_sources_tab(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(6)
+
+        v.addWidget(QLabel("Свои подписки (каждая ссылка с новой строки):"))
+        self.txt_sources = QTextEdit()
+        self.txt_sources.setPlainText("\n".join(self._config.get("custom_sources") or []))
+        v.addWidget(self.txt_sources, 1)
+
+        v.addWidget(QLabel("Свои одиночные ключи (vless://, trojan://, ss://… по одному в строке):"))
+        self.txt_keys = QTextEdit()
+        self.txt_keys.setPlainText("\n".join(self._config.get("custom_keys") or []))
+        v.addWidget(self.txt_keys, 1)
+        return w
+
+    def _build_misc_tab(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(10, 10, 10, 10)
+        v.setSpacing(10)
+
+        self.cb_notify = QCheckBox("Уведомления Windows (toast)")
+        self.cb_notify.setChecked(bool(self._config.get("notifications_enabled", True)))
+        v.addWidget(self.cb_notify)
+
+        self.cb_bg_scan = QCheckBox("Фоновый поиск других регионов после подключения")
+        self.cb_bg_scan.setChecked(bool(self._config.get("background_scan_enabled", True)))
+        v.addWidget(self.cb_bg_scan)
+
+        h = QHBoxLayout()
+        h.addWidget(QLabel("Максимум фоновых проверок:"))
+        self.ed_max_bg = QLineEdit(str(self._config.get("max_background_tests", 60)))
+        self.ed_max_bg.setFixedWidth(80)
+        h.addWidget(self.ed_max_bg)
+        h.addStretch()
+        v.addLayout(h)
+
+        h2 = QHBoxLayout()
+        h2.addWidget(QLabel("Путь к HiddifyCli.exe:"))
+        self.ed_hiddify = QLineEdit(self._config.get("hiddify_cli", ""))
+        h2.addWidget(self.ed_hiddify, 1)
+        v.addLayout(h2)
+
+        v.addStretch()
+        return w
+
+    # ── обработчики ──
+    def _save(self):
+        updates = {}
+        updates["hotkey"] = self.ed_hotkey.text().strip() or "ctrl+alt+b"
+        updates["pause_hotkey"] = self.ed_pause.text().strip() or "ctrl+alt+p"
+        updates["regions_hotkey"] = self.ed_regions.text().strip() or "ctrl+alt+r"
+
+        protos = [code for code, cb in self._proto_checks.items() if cb.isChecked()]
+        if not protos:
+            protos = ["vless", "trojan"]
+        updates["priority_protocols"] = protos
+
+        excluded = [s.strip().upper() for s in self.ed_excluded.text().split(",") if s.strip()]
+        updates["excluded_countries"] = excluded
+
+        updates["custom_sources"] = [
+            l.strip() for l in self.txt_sources.toPlainText().splitlines() if l.strip()
+        ]
+        updates["custom_keys"] = [
+            l.strip() for l in self.txt_keys.toPlainText().splitlines() if l.strip()
+        ]
+
+        updates["notifications_enabled"] = self.cb_notify.isChecked()
+        updates["background_scan_enabled"] = self.cb_bg_scan.isChecked()
+        try:
+            updates["max_background_tests"] = max(1, int(self.ed_max_bg.text().strip() or "60"))
+        except ValueError:
+            updates["max_background_tests"] = 60
+
+        hiddify_path = self.ed_hiddify.text().strip()
+        if hiddify_path:
+            updates["hiddify_cli"] = hiddify_path
+
+        self.settings_changed.emit(updates)
+        self.close()
+
+    def _reset_defaults(self):
+        from vpn_settings import DEFAULTS
+        self._config = dict(DEFAULTS)
+        # перезагрузим UI: проще пересоздать вкладки
+        self.tabs.clear()
+        self.tabs.addTab(self._build_hotkeys_tab(), "Горячие клавиши")
+        self.tabs.addTab(self._build_protocols_tab(), "Протоколы")
+        self.tabs.addTab(self._build_sources_tab(), "Источники")
+        self.tabs.addTab(self._build_misc_tab(), "Прочее")
 
     def mousePressEvent(self, e):
         self._drag_pos = e.globalPosition().toPoint() - self.frameGeometry().topLeft()
@@ -964,12 +1610,15 @@ class dg4VPNApp(QWidget):
         self._lock       = threading.Lock()
         self.vpn_process = None
         self.is_paused   = False
-        self.is_connected= False
+        self.is_connected = False
         self.current_key = None
         self.start_time  = None
         self._worker     = None
         self._drag_pos   = None
-        self._blur_pixmap = None
+        self._hotkeys_registered = []
+        self.region_win = None
+        self.settings_win = None
+        self.history_win = None
 
         self._setup_window()
         self._setup_ui()
@@ -982,6 +1631,8 @@ class dg4VPNApp(QWidget):
 
         if not is_admin():
             self._log("⚠ ЗАПУСТИТЕ ОТ АДМИНА!")
+        if psutil is None:
+            self._log("psutil не установлен — график скорости отключён")
 
     # ── Окно ──────────────────────────────────
     def _center(self):
@@ -1004,7 +1655,7 @@ class dg4VPNApp(QWidget):
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint |
                             Qt.WindowType.WindowStaysOnTopHint)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
-        self.resize(400, 650)
+        self.resize(420, 760)
         self._center()
 
     def resizeEvent(self, e):
@@ -1026,7 +1677,6 @@ class dg4VPNApp(QWidget):
     def showEvent(self, e):
         super().showEvent(e)
         self._apply_mask()
-        # Включаем нативный блюр через Windows API
         SystemManager.enable_blur(self.winId())
 
     def moveEvent(self, e):
@@ -1041,14 +1691,12 @@ class dg4VPNApp(QWidget):
         path.addRoundedRect(0, 0, w, h, 24, 24)
         p.setClipPath(path)
 
-        # Тёмно-синий glass-оверлей поверх нативного блюра
         overlay = QLinearGradient(0, 0, 0, h)
         overlay.setColorAt(0.0, QColor(8,  12, 34, 175))
         overlay.setColorAt(0.5, QColor(6,  10, 28, 185))
         overlay.setColorAt(1.0, QColor(4,  8,  22, 195))
         p.fillRect(0, 0, w, h, QBrush(overlay))
 
-        # Радиальный акцент в центре (слабый свет сверху)
         radial = QRadialGradient(w / 2, 0, w * 0.8)
         radial.setColorAt(0,   QColor(0, 180, 255, 22))
         radial.setColorAt(0.5, QColor(0, 120, 200, 10))
@@ -1057,7 +1705,6 @@ class dg4VPNApp(QWidget):
 
         p.setClipping(False)
 
-        # Рамка — вращающийся конический градиент (циан + фиолет)
         pen_grad = QConicalGradient(w / 2, h / 2, self._border_angle)
         pen_grad.setColorAt(0.00, QColor(0,   210, 255, 220))
         pen_grad.setColorAt(0.25, QColor(120,  50, 255, 120))
@@ -1079,23 +1726,18 @@ class dg4VPNApp(QWidget):
 
         main = QVBoxLayout(self)
         main.setContentsMargins(16, 8, 16, 14)
-        main.setSpacing(10)
+        main.setSpacing(8)
 
-        # ── Заголовок ──────────────────────────
+        # шапка
         hdr = QHBoxLayout()
         hdr.setContentsMargins(8, 2, 4, 2)
 
-        # Логотип с animated dot
         logo_w = QWidget(); logo_w.setFixedSize(100, 32)
         logo_w.setStyleSheet("background: transparent;")
-
         dot = QLabel("◉")
-        dot.setStyleSheet(
-            "color: #00d2ff; font-size: 13px; background: transparent; padding-right: 2px;")
+        dot.setStyleSheet("color: #00d2ff; font-size: 13px; background: transparent; padding-right: 2px;")
         title = QLabel("dg4VPN")
-        title.setStyleSheet(
-            "color: #dce8ff; font-family: Lexend; font-size: 14px; "
-            "font-weight: bold; letter-spacing: 1px; background: transparent;")
+        title.setStyleSheet("color: #dce8ff; font-family: Lexend; font-size: 14px; font-weight: bold; letter-spacing: 1px; background: transparent;")
         logo_row = QHBoxLayout(logo_w)
         logo_row.setContentsMargins(0,0,0,0); logo_row.setSpacing(4)
         logo_row.addWidget(dot); logo_row.addWidget(title)
@@ -1103,8 +1745,9 @@ class dg4VPNApp(QWidget):
         hdr.addWidget(logo_w)
         hdr.addStretch()
 
-        for txt, col, cmd in [("—", "#60a0c0", self.hide),
-                               ("✕", "#ff4678", self._quit)]:
+        for txt, col, cmd in [("⚙", "#9ad4ff", self._show_settings),
+                              ("—", "#60a0c0", self.hide),
+                              ("✕", "#ff4678", self._quit)]:
             btn = QPushButton(txt)
             btn.setFixedSize(30, 26)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -1126,7 +1769,7 @@ class dg4VPNApp(QWidget):
         hdr_w.setFixedHeight(38)
         main.addWidget(hdr_w)
 
-        # ── Кольцо ────────────────────────────
+        # кольцо
         ring_container = QWidget()
         ring_container.setStyleSheet("background: transparent;")
         rl = QHBoxLayout(ring_container)
@@ -1135,37 +1778,42 @@ class dg4VPNApp(QWidget):
         rl.addWidget(self.ring, alignment=Qt.AlignmentFlag.AlignCenter)
         main.addWidget(ring_container)
 
-        # ── Инфо-карточка ──────────────────────
+        # график скорости — сразу под кольцом
+        self.speed_graph = SpeedGraphWidget()
+        main.addWidget(self.speed_graph)
+
+        # инфо-карточка
         self.card = InfoCard()
         main.addWidget(self.card)
 
-        # ── Главная кнопка ────────────────────
+        # главная кнопка
         self.btn = ConnectButton()
         self.btn.clicked.connect(self._toggle_vpn)
         main.addWidget(self.btn)
 
-        # ── Три малые кнопки в ряд ────────────
+        # ряд 1: ПАУЗА · ПОИСК · РЕГИОН · ИСТОРИЯ
         controls = QHBoxLayout()
-        controls.setSpacing(8)
+        controls.setSpacing(6)
 
-        self.btn_pause   = SmallButton("⏸  ПАУЗА")
+        self.btn_pause = SmallButton("⏸ ПАУЗА")
         self.btn_pause.clicked.connect(self._toggle_pause)
-
-        self.btn_search  = SmallButton("⟳  ПОИСК")
+        self.btn_search = SmallButton("⟳ ПОИСК")
         self.btn_search.clicked.connect(lambda: self._start_connect(use_cache=False))
-
-        self.btn_history = SmallButton("☰  ИСТОРИЯ")
+        self.btn_region = SmallButton("◎ РЕГИОН")
+        self.btn_region.clicked.connect(self._show_regions)
+        self.btn_history = SmallButton("☰ ИСТОРИЯ")
         self.btn_history.clicked.connect(self._show_history)
 
         controls.addWidget(self.btn_pause)
         controls.addWidget(self.btn_search)
+        controls.addWidget(self.btn_region)
         controls.addWidget(self.btn_history)
         main.addLayout(controls)
 
-        # ── Консоль логов ─────────────────────
+        # консоль логов
         self.console = QTextEdit()
         self.console.setReadOnly(True)
-        self.console.setFixedHeight(82)
+        self.console.setFixedHeight(80)
         self.console.setStyleSheet("""
             QTextEdit {
                 background: rgba(6, 10, 30, 200);
@@ -1176,12 +1824,8 @@ class dg4VPNApp(QWidget):
                 border-radius: 12px;
                 padding: 8px 12px;
             }
-            QScrollBar:vertical {
-                background: transparent; width: 4px;
-            }
-            QScrollBar::handle:vertical {
-                background: rgba(0,180,255,80); border-radius: 2px;
-            }
+            QScrollBar:vertical { background: transparent; width: 4px; }
+            QScrollBar::handle:vertical { background: rgba(0,180,255,80); border-radius: 2px; }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
         """)
         main.addWidget(self.console)
@@ -1220,6 +1864,8 @@ class dg4VPNApp(QWidget):
             "pause": mk("#3366ff"),
         }
         menu = (item('Развернуть', self._show_window, default=True),
+                item('Регионы',    self._show_regions),
+                item('Настройки',  self._show_settings),
                 item('Выход',      self._quit))
         self._tray = pystray.Icon("dg4VPN", self._tray_icons["off"], "dg4VPN", menu)
         threading.Thread(target=self._tray.run, daemon=True).start()
@@ -1242,44 +1888,100 @@ class dg4VPNApp(QWidget):
         self.raise_()
         self.activateWindow()
 
+    # ── Окна-диалоги ──────────────────────────
     def _show_history(self):
-        if not hasattr(self, 'history_win'):
+        if self.history_win is None:
             self.history_win = HistoryWindow(self)
             self.history_win.key_selected.connect(self._on_key_selected_from_history)
-        
-        # Центрируем относительно главного окна
         self.history_win.refresh()
         self.history_win.move(self.x() + (self.width() - self.history_win.width()) // 2,
-                             self.y() + (self.height() - self.history_win.height()) // 2)
+                              self.y() + (self.height() - self.history_win.height()) // 2)
         self.history_win.show()
 
+    def _show_regions(self):
+        if self.region_win is None:
+            self.region_win = RegionWindow(self)
+            self.region_win.key_selected.connect(self._on_region_selected)
+        self.region_win.move(self.x() + (self.width() - self.region_win.width()) // 2,
+                             self.y() + max(0, (self.height() - self.region_win.height()) // 2))
+        self.region_win.show()
+        # подсветить активный, если есть
+        if self.current_key:
+            self.region_win.mark_active(self.current_key.get("link"))
+
+    def _show_settings(self):
+        if self.settings_win is None:
+            self.settings_win = SettingsWindow(CONFIG, self)
+            self.settings_win.settings_changed.connect(self._apply_settings_update)
+        else:
+            # обновим виджеты в окне на актуальный CONFIG
+            self.settings_win = SettingsWindow(CONFIG, self)
+            self.settings_win.settings_changed.connect(self._apply_settings_update)
+        self.settings_win.move(self.x() + (self.width() - self.settings_win.width()) // 2,
+                               self.y() + max(0, (self.height() - self.settings_win.height()) // 2))
+        self.settings_win.show()
+
+    def _apply_settings_update(self, updates):
+        SettingsManager.merge_and_save(CONFIG, updates)
+        self.logic.refresh_from_config()
+        ToastNotifier.set_enabled(bool(CONFIG.get("notifications_enabled", True)))
+        # перепривязать горячие клавиши
+        if keyboard:
+            self._setup_hotkeys()
+        self._log("Настройки сохранены")
+        ToastNotifier.info("Настройки сохранены")
+
+    # ── Region/History callbacks ──────────────
     def _on_key_selected_from_history(self, key_data):
         self._log(f"Выбран ключ из истории: {key_data.get('name')}")
         self._start_connect_with_key(key_data)
 
+    def _on_region_selected(self, key_data):
+        if self.current_key and key_data.get("link") == self.current_key.get("link"):
+            self._log("Этот узел уже активен")
+            return
+        flag = HistoryManager.get_flag(key_data.get("country", "??"))
+        self._log(f"Переключаюсь на {flag} {key_data.get('country','??')} — {key_data.get('name','')[:25]}")
+        self._start_connect_with_key(key_data)
+
     def _start_connect_with_key(self, key_data):
+        # остановим текущий worker
+        if self._worker:
+            try: self._worker.stop()
+            except Exception: pass
         self.ring.set_spinning(True)
         self.ring.set_status("...", "yellow")
         self.btn.set_text("ЗАПУСК...")
         self._update_tray("work")
-        
-        self._worker = VPNWorker(self.logic, "resume", key=key_data)
-        self._worker.log_signal.connect(self._log_signal)
-        self._worker.connected_signal.connect(self._on_worker_connected)
-        self._worker.disconnected_signal.connect(self._on_worker_disconnected)
+
+        self._worker = VPNWorker(self.logic, "resume", key=key_data, config=CONFIG)
+        self._wire_worker(self._worker)
         self._worker.start()
 
     # ── Горячие клавиши ───────────────────────
     def _setup_hotkeys(self):
-        if keyboard:
-            try:
-                keyboard.add_hotkey(CONFIG["hotkey"],       self._toggle_vpn)
-                keyboard.add_hotkey(CONFIG["pause_hotkey"], self._toggle_pause)
-                self._log("Горячие клавиши активны")
-            except Exception as e:
-                logger.warning(f"Не удалось настроить горячие клавиши: {e}")
-        else:
+        if not keyboard:
             self._log("Горячие клавиши недоступны (нужны права админа)")
+            return
+        # снимем старые
+        for hk in self._hotkeys_registered:
+            try: keyboard.remove_hotkey(hk)
+            except Exception: pass
+        self._hotkeys_registered = []
+        try:
+            if CONFIG.get("hotkey"):
+                self._hotkeys_registered.append(
+                    keyboard.add_hotkey(CONFIG["hotkey"], self._toggle_vpn))
+            if CONFIG.get("pause_hotkey"):
+                self._hotkeys_registered.append(
+                    keyboard.add_hotkey(CONFIG["pause_hotkey"], self._toggle_pause))
+            if CONFIG.get("regions_hotkey"):
+                self._hotkeys_registered.append(
+                    keyboard.add_hotkey(CONFIG["regions_hotkey"], self._show_regions))
+            self._log("Горячие клавиши активны")
+        except Exception as e:
+            logger.warning(f"Не удалось настроить горячие клавиши: {e}")
+            self._log(f"Ошибка горячих клавиш: {e}")
 
     # ── VPN логика ────────────────────────────
     def _toggle_vpn(self):
@@ -1287,6 +1989,13 @@ class dg4VPNApp(QWidget):
             self._on_disconnected()
         else:
             self._start_connect()
+
+    def _wire_worker(self, worker):
+        worker.log_signal.connect(self._log_signal)
+        worker.connected_signal.connect(self._on_worker_connected)
+        worker.disconnected_signal.connect(self._on_worker_disconnected)
+        worker.new_key_signal.connect(self._on_new_working_key)
+        worker.scan_done_signal.connect(self._on_scan_done)
 
     def _start_connect(self, use_cache=True):
         self.ring.set_spinning(True)
@@ -1296,10 +2005,12 @@ class dg4VPNApp(QWidget):
         if not use_cache:
             self._log("Запущен полный поиск новых ключей...")
 
-        self._worker = VPNWorker(self.logic, "connect", use_cache=use_cache)
-        self._worker.log_signal.connect(self._log_signal)
-        self._worker.connected_signal.connect(self._on_worker_connected)
-        self._worker.disconnected_signal.connect(self._on_worker_disconnected)
+        # обнулим список регионов
+        if self.region_win is not None:
+            self.region_win.reset()
+
+        self._worker = VPNWorker(self.logic, "connect", use_cache=use_cache, config=CONFIG)
+        self._wire_worker(self._worker)
         self._worker.start()
 
     def _toggle_pause(self):
@@ -1317,8 +2028,9 @@ class dg4VPNApp(QWidget):
             self.ring.set_spinning(False)
             self.card.set_row("status", "ПАУЗА", "#00c8ff")
             self.btn.set_text("ВОЗОБНОВИТЬ")
-            self.btn_pause.set_text("ПУСК")
+            self.btn_pause.set_text("▶ ПУСК")
             self._update_tray("pause")
+            ToastNotifier.paused()
         else:
             with self._lock:
                 self.is_paused = False
@@ -1326,15 +2038,13 @@ class dg4VPNApp(QWidget):
             self.ring.set_spinning(True)
             self.ring.set_status("...", "yellow")
             self.btn.set_text("ЗАПУСК...")
-            self.btn_pause.set_text("ПАУЗА")
+            self.btn_pause.set_text("⏸ ПАУЗА")
             self._update_tray("work")
 
             with self._lock:
                 key = self.current_key
-            self._worker = VPNWorker(self.logic, "resume", key=key)
-            self._worker.log_signal.connect(self._log_signal)
-            self._worker.connected_signal.connect(self._on_worker_connected)
-            self._worker.disconnected_signal.connect(self._on_worker_disconnected)
+            self._worker = VPNWorker(self.logic, "resume", key=key, config=CONFIG)
+            self._wire_worker(self._worker)
             self._worker.start()
 
     def _on_worker_connected(self, key_data):
@@ -1343,17 +2053,32 @@ class dg4VPNApp(QWidget):
     def _on_worker_disconnected(self):
         self._disconnected_signal.emit()
 
+    def _on_new_working_key(self, key_data):
+        """Прилетел рабочий ключ из фонового сканирования."""
+        if self.region_win is not None:
+            self.region_win.add_key(key_data)
+
+    def _on_scan_done(self):
+        if self.region_win is not None:
+            # пометить, что фоновый поиск завершён
+            self.region_win.status_label.setText(
+                self.region_win.status_label.text() + " ✓")
+
     def _on_connected(self, key_data):
         with self._lock:
             self.current_key  = key_data
             self.is_connected = True
-        
-        # Сохраняем в историю
+
         HistoryManager.save_key(key_data)
-        
+
+        # добавим активный ключ в окно регионов (если открыто)
+        if self.region_win is not None:
+            self.region_win.add_key(key_data)
+            self.region_win.mark_active(key_data.get("link"))
+
         self.ring.set_spinning(False)
         self.ring.set_status("ON", "green")
-        self.card.set_row("status",  "ЗАЩИЩЕНО",                               "#32f0a0")
+        self.card.set_row("status",  "ЗАЩИЩЕНО", "#32f0a0")
         flag = HistoryManager.get_flag(key_data.get("country", "??"))
         self.card.set_row("country", f"{flag} {key_data.get('country','??').upper()}")
         ping = key_data.get("latency")
@@ -1361,8 +2086,12 @@ class dg4VPNApp(QWidget):
         self.btn.set_text("ОТКЛЮЧИТЬ")
         self._update_tray("on")
         self.start_time = time.time()
+        self.speed_graph.reset()
+
+        ToastNotifier.connected(key_data.get("country", "??"), ping)
 
     def _on_disconnected(self):
+        was_connected = self.is_connected or self.is_paused
         with self._lock:
             self.is_connected = False
             self.is_paused    = False
@@ -1372,16 +2101,22 @@ class dg4VPNApp(QWidget):
         self.card.set_row("country", "—",           "#7ab8e0")
         self.card.set_row("ping",    "—",           "#7ab8e0")
         self.btn.set_text("ПОДКЛЮЧИТЬ")
-        self.btn_pause.set_text("ПАУЗА")
+        self.btn_pause.set_text("⏸ ПАУЗА")
         self._update_tray("off")
         self._log("Отключено")
         if self._worker:
+            try: self._worker.stop()
+            except Exception: pass
             self._worker._kill_hiddify()
         SystemManager.set_proxy(False)
+        if was_connected:
+            ToastNotifier.disconnected()
 
     def _quit(self):
         self.ring.set_spinning(False)
         if self._worker:
+            try: self._worker.stop()
+            except Exception: pass
             self._worker._kill_hiddify()
         set_system_proxy(False)
         if hasattr(self, '_tray'):
