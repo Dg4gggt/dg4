@@ -146,7 +146,7 @@ from PyQt6.QtCore import (
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QLinearGradient,
     QRadialGradient, QFont, QPainterPath, QConicalGradient,
-    QRegion,
+    QRegion, QFontDatabase,
 )
 
 # ──────────────────────────────────────────────
@@ -1186,7 +1186,7 @@ def slide_panel_out(panel, duration=200):
 # ──────────────────────────────────────────────
 _DIALOG_CONTAINER_QSS = """
 #DialogContainer {
-    background: rgb(6, 10, 28);
+    background: rgba(6, 10, 28, 215);
     border: 1px solid rgba(0, 180, 255, 90);
     border-radius: 20px;
 }
@@ -1831,13 +1831,10 @@ class dg4VPNApp(QWidget):
         path.addRoundedRect(0, 0, w, h, 24, 24)
         p.setClipPath(path)
 
-        # фон главного окна полностью непрозрачный — иначе Qt рендерит
-        # текст на translucent-поверхности без субпиксельного сглаживания
-        # и буквы выглядят размыто
         overlay = QLinearGradient(0, 0, 0, h)
-        overlay.setColorAt(0.0, QColor(8,  12, 34, 255))
-        overlay.setColorAt(0.5, QColor(6,  10, 28, 255))
-        overlay.setColorAt(1.0, QColor(4,  8,  22, 255))
+        overlay.setColorAt(0.0, QColor(8,  12, 34, 215))
+        overlay.setColorAt(0.5, QColor(6,  10, 28, 220))
+        overlay.setColorAt(1.0, QColor(4,  8,  22, 225))
         p.fillRect(0, 0, w, h, QBrush(overlay))
 
         radial = QRadialGradient(w / 2, 0, w * 0.8)
@@ -2298,9 +2295,38 @@ class dg4VPNApp(QWidget):
 
 
 # ──────────────────────────────────────────────
+def _load_bundled_fonts(app):
+    """Подгрузить локальный Lexend, чтобы UI не зависел от того, установлен
+    ли шрифт в системе. Без этого на чистых Windows Qt падает на стандартный
+    растровый fallback (Arial/Tahoma в малых кеглях рендерится «крошкой»)."""
+    base = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fonts")
+    if not os.path.isdir(base):
+        return
+    loaded_family = None
+    for fname in sorted(os.listdir(base)):
+        if not fname.lower().endswith((".ttf", ".otf")):
+            continue
+        fid = QFontDatabase.addApplicationFont(os.path.join(base, fname))
+        if fid < 0:
+            logger.debug(f"Не удалось загрузить шрифт {fname}")
+            continue
+        families = QFontDatabase.applicationFontFamilies(fid)
+        if families and loaded_family is None:
+            loaded_family = families[0]
+    if loaded_family:
+        # ставим как дефолтный шрифт приложения — каскадно подхватится
+        # любым QLabel / QPushButton / стилем, где явно не переопределён
+        f = QFont(loaded_family, 10)
+        f.setHintingPreference(QFont.HintingPreference.PreferFullHinting)
+        f.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+        app.setFont(f)
+        logger.info(f"Загружен шрифт интерфейса: {loaded_family}")
+
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
+    _load_bundled_fonts(app)
     window = dg4VPNApp()
     window.show()
     sys.exit(app.exec())
