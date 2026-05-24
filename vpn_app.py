@@ -141,7 +141,7 @@ from PyQt6.QtWidgets import (
 )
 from PyQt6.QtCore import (
     Qt, QTimer, QThread, pyqtSignal, QRect,
-    QPropertyAnimation, QEasingCurve,
+    QPropertyAnimation, QEasingCurve, QPoint,
 )
 from PyQt6.QtGui import (
     QPainter, QColor, QPen, QBrush, QLinearGradient,
@@ -236,12 +236,13 @@ class VPNWorker(QThread):
     new_key_signal      = pyqtSignal(dict)
     scan_done_signal    = pyqtSignal()
 
-    def __init__(self, logic, action, key=None, use_cache=True, config=None):
+    def __init__(self, logic, action, key=None, use_cache=True, config=None, strict=False):
         super().__init__()
         self.logic = logic
         self.action = action
         self.key = key
         self.use_cache = use_cache
+        self.strict = strict   # если True — _resume не падает на _connect/кэш
         self.config = config or {}
         self._lock = threading.Lock()
         self.vpn_process = None
@@ -305,6 +306,11 @@ class VPNWorker(QThread):
             self._save_cache(self.key)
             self.connected_signal.emit(self.key)
             self._start_background_scan(skip_link=self.key.get("link"))
+            return
+        if self.strict:
+            # пользователь явно выбрал узел — не подменяем его кэшем
+            self.log_signal.emit("Выбранный узел недоступен")
+            self.disconnected_signal.emit()
             return
         self.log_signal.emit("Сбой возобновления, ищу новый...")
         self._connect()
@@ -1069,40 +1075,61 @@ def _gc_anim(anim):
         pass
 
 
-def slide_panel_in(panel, anchor, target_w=None, target_h=None, duration=260):
-    """Прицепить panel к правому краю anchor и анимированно выехать вправо.
-    Возвращает анимацию (для возможной отмены)."""
+def slide_panel_in(panel, anchor, target_w=None, target_h=None, duration=220):
+    """Выезд панели «из-под» правого края anchor.
+
+    Изначально панель полного размера, но позиционирована так, что её правый
+    край заходит за правый край anchor → панель целиком скрыта за main-окном.
+    Анимируем только pos — никакого пересчёта layout каждый кадр.
+    """
     if target_w is None:
         target_w = panel.width() or 380
     if target_h is None:
         target_h = anchor.height()
-    target_x = anchor.x() + anchor.width() - 8
+    final_x = anchor.x() + anchor.width() - 8
     target_y = anchor.y()
-    # стартуем шириной 1 (как будто прячется за главным окном)
-    panel.setGeometry(target_x, target_y, 1, target_h)
+    # tucked: панель чуть-чуть «выглядывает» за левую границу anchor.x+width-target_w
+    start_x = anchor.x() + anchor.width() - target_w + 4
+
+    panel.resize(target_w, target_h)
+    panel.move(start_x, target_y)
     panel.show()
-    panel.raise_()
-    panel.activateWindow()
-    anim = QPropertyAnimation(panel, b"geometry")
+    # поднимаем main выше — чтобы панель буквально выезжала из-под него
+    try:
+        anchor.raise_()
+    except Exception:
+        pass
+
+    panel._tucked_pos = (start_x, target_y)
+    panel._extended_pos = (final_x, target_y)
+    panel._anchor_ref = anchor
+
+    anim = QPropertyAnimation(panel, b"pos")
     anim.setDuration(duration)
-    anim.setStartValue(QRect(target_x, target_y, 1, target_h))
-    anim.setEndValue(QRect(target_x, target_y, target_w, target_h))
+    anim.setStartValue(QPoint(start_x, target_y))
+    anim.setEndValue(QPoint(final_x, target_y))
     anim.setEasingCurve(QEasingCurve.Type.OutCubic)
     _active_animations.append(anim)
     anim.finished.connect(lambda a=anim: _gc_anim(a))
     anim.start()
-    panel._slide_target = (target_x, target_y, target_w, target_h)
     return anim
 
 
-def slide_panel_out(panel, duration=200):
-    """Спрятать панель обратно за главное окно."""
-    geo = panel.geometry()
-    end_geo = QRect(geo.x(), geo.y(), 1, geo.height())
-    anim = QPropertyAnimation(panel, b"geometry")
+def slide_panel_out(panel, duration=180):
+    """Уезд панели обратно за правый край anchor."""
+    tucked = getattr(panel, "_tucked_pos", None)
+    if tucked is None:
+        try:
+            panel.hide()
+        except Exception:
+            pass
+        return None
+    start = panel.pos()
+    end = QPoint(*tucked)
+    anim = QPropertyAnimation(panel, b"pos")
     anim.setDuration(duration)
-    anim.setStartValue(geo)
-    anim.setEndValue(end_geo)
+    anim.setStartValue(start)
+    anim.setEndValue(end)
     anim.setEasingCurve(QEasingCurve.Type.InCubic)
     _active_animations.append(anim)
 
@@ -1735,7 +1762,8 @@ class dg4VPNApp(QWidget):
     def showEvent(self, e):
         super().showEvent(e)
         self._apply_mask()
-        SystemManager.enable_blur(self.winId())
+        # системный Acrylic-blur выключен: на некоторых билдах Windows он
+        # мажет содержимое окна, а не только фон → весь UI выглядит размытым.
 
     def moveEvent(self, e):
         super().moveEvent(e)
@@ -2040,7 +2068,9 @@ class dg4VPNApp(QWidget):
         self.btn.set_text("ЗАПУСК...")
         self._update_tray("work")
 
-        self._worker = VPNWorker(self.logic, "resume", key=key_data, config=CONFIG)
+        # strict=True — пользователь явно выбрал ключ, не подменять кэшем
+        self._worker = VPNWorker(self.logic, "resume", key=key_data,
+                                 use_cache=False, config=CONFIG, strict=True)
         self._wire_worker(self._worker)
         self._worker.start()
 
@@ -2198,8 +2228,24 @@ class dg4VPNApp(QWidget):
         if was_connected:
             ToastNotifier.disconnected()
 
+    def _hide_all_panels(self):
+        for panel in (self.settings_win, self.region_win, self.history_win):
+            if panel is None:
+                continue
+            try:
+                if panel.isVisible():
+                    panel.hide()
+            except Exception:
+                pass
+
+    def hideEvent(self, e):
+        # когда главное окно сворачивается — прячем шторки тоже
+        super().hideEvent(e)
+        self._hide_all_panels()
+
     def _quit(self):
         self.ring.set_spinning(False)
+        self._hide_all_panels()
         if self._worker:
             try: self._worker.stop()
             except Exception: pass
