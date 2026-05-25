@@ -655,26 +655,33 @@ class SpeedGraphWidget(QWidget):
         self._up = [0.0] * self._max_points
         self._cur_down = 0.0
         self._cur_up = 0.0
+        self._disp_down = 0.0
+        self._disp_up = 0.0
         self._last_recv = None
         self._last_sent = None
         self._last_ts = None
+        self._sample_interval = 1.0
+        self._last_sample_ts = time.time()
 
         self._poll = QTimer(self)
         self._poll.timeout.connect(self._sample)
-        self._poll.start(1000)
+        self._poll.start(int(self._sample_interval * 1000))
 
         self._anim = QTimer(self)
         self._anim.timeout.connect(self.update)
-        self._anim.start(60)
+        self._anim.start(16)  # ~60 fps
 
     def reset(self):
         self._down = [0.0] * self._max_points
         self._up = [0.0] * self._max_points
         self._cur_down = 0.0
         self._cur_up = 0.0
+        self._disp_down = 0.0
+        self._disp_up = 0.0
         self._last_recv = None
         self._last_sent = None
         self._last_ts = None
+        self._last_sample_ts = time.time()
         self.update()
 
     def _sample(self):
@@ -687,6 +694,7 @@ class SpeedGraphWidget(QWidget):
                 self._last_recv = io.bytes_recv
                 self._last_sent = io.bytes_sent
                 self._last_ts = now
+                self._last_sample_ts = now
                 return
             dt = max(1e-3, now - self._last_ts)
             d_recv = max(0, io.bytes_recv - self._last_recv) / dt
@@ -698,6 +706,7 @@ class SpeedGraphWidget(QWidget):
             self._cur_up = d_sent
             self._down.append(d_recv); self._down = self._down[-self._max_points:]
             self._up.append(d_sent); self._up = self._up[-self._max_points:]
+            self._last_sample_ts = now
         except Exception:
             pass
 
@@ -748,6 +757,14 @@ class SpeedGraphWidget(QWidget):
         # лёгкое сглаживание шкалы
         max_val = max_val * 1.1
 
+        # прогресс между сэмплами 0..1 → плавный сдвиг графика влево
+        elapsed = time.time() - self._last_sample_ts
+        progress = max(0.0, min(1.0, elapsed / self._sample_interval))
+        # плавная интерполяция отображаемых чисел
+        ease = 0.18
+        self._disp_down += (self._cur_down - self._disp_down) * ease
+        self._disp_up += (self._cur_up - self._disp_up) * ease
+
         def build_path(series, base_offset_y=0):
             pth = QPainterPath()
             n = len(series)
@@ -757,8 +774,10 @@ class SpeedGraphWidget(QWidget):
             usable_h = h - 22
             x0 = 8
             y0 = 18
+            step = usable_w / (self._max_points - 1)
+            shift = progress * step
             for i, v in enumerate(series):
-                x = x0 + (i * usable_w / (self._max_points - 1))
+                x = x0 + i * step - shift
                 y = y0 + usable_h - (v / max_val) * usable_h
                 if i == 0:
                     pth.moveTo(x, y)
@@ -794,9 +813,9 @@ class SpeedGraphWidget(QWidget):
         # тексты сверху
         p.setPen(QColor(120, 200, 255))
         p.setFont(QFont("Inter", 8, QFont.Weight.Bold))
-        p.drawText(10, 12, f"▼ {self._fmt(self._cur_down)}")
+        p.drawText(10, 12, f"▼ {self._fmt(self._disp_down)}")
         p.setPen(QColor(170, 130, 255))
-        right_text = f"▲ {self._fmt(self._cur_up)}"
+        right_text = f"▲ {self._fmt(self._disp_up)}"
         fm = p.fontMetrics()
         tw = fm.horizontalAdvance(right_text)
         p.drawText(w - tw - 10, 12, right_text)
